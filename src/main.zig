@@ -219,49 +219,6 @@ fn types_eq(a: Ty, b: Ty, env: *const CoreEnv) bool {
     };
 }
 
-const DependenciesIter = struct {
-    ty_stack: std.ArrayList(Ty),
-    seen_inferences: std.AutoHashMap(u16, u0),
-    env: *const CoreEnv,
-
-    const Self = @This();
-
-    pub fn init(ty: Ty, alloc: std.mem.Allocator, env: *const CoreEnv) !Self {
-        var ty_stack = std.ArrayList(Ty).init(alloc);
-        try ty_stack.append(ty);
-
-        return .{ .ty_stack = ty_stack, .seen_inferences = std.AutoHashMap(u16, u0).init(alloc), .env = env };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.ty_stack.deinit();
-        self.seen_inferences.deinit();
-    }
-
-    pub fn next(self: *Self) !?u16 {
-        return while (self.ty_stack.popOrNull()) |current_ty| {
-            switch (current_ty) {
-                .inference => |id| {
-                    if (self.seen_inferences.contains(id)) continue;
-                    try self.seen_inferences.put(id, 0);
-                    break id;
-                },
-                .bound => |bound| {
-                    // break this up so we can get to inner inferences.
-                    if (!bound.range.is_empty()) {
-                        try self.ty_stack.ensureUnusedCapacity(bound.range.len());
-
-                        for (self.env.tys.items[bound.range.start..bound.range.end]) |child| {
-                            self.ty_stack.appendAssumeCapacity(child);
-                        }
-                    }
-                    continue;
-                },
-            }
-        } else null;
-    }
-};
-
 fn substitute(inference: u16, target: Ty, env: *CoreEnv) void {
     for (env.tys.items) |*ty| {
         switch (ty.*) {
