@@ -92,7 +92,8 @@ fn drop_temps(inferences: *InferenceMap, env: *const NamedEnv) !void {
 
     var keys = inferences.keyIterator();
     while (keys.next()) |k| {
-        if (env.inferences.items[k.*].tag != .variable) {
+        const tag = env.inferences.items[k.*].tag;
+        if (tag != .variable) {
             try dropped.append(k.*);
         }
     }
@@ -463,6 +464,13 @@ const AST = struct {
                 .data = .{ .lhs = func, .rhs = arg },
             };
         }
+
+        pub inline fn lookup(name_index: u16) Node {
+            return .{
+                .tag = .name_lookup,
+                .data = .{ .lhs = name_index, .rhs = 0 },
+            };
+        }
     };
 
     pub fn init(alloc: std.mem.Allocator) AST {
@@ -485,14 +493,14 @@ const AST = struct {
     }
 
     pub inline fn apply(self: *AST, func: u16, arg: u16) !u16 {
-        try self.nodes.ensureUnusedCapacity(1);
+        try self.nodes.ensureUnusedCapacity(self.alloc, 1);
         return self.applyAssumeCapacity(func, arg);
     }
 
     pub inline fn applyAssumeCapacity(self: *AST, func: u16, arg: u16) u16 {
         return self.pushNodeAssumeCapacity(Node.apply(func, arg));
     }
-    
+
     pub inline fn pushNodeAssumeCapacity(self: *AST, node: Node) u16 {
         const idx = @truncate(u16, self.nodes.len);
 
@@ -501,9 +509,14 @@ const AST = struct {
         return idx;
     }
 
+    pub inline fn pushNode(self: *AST, node: Node) !u16 {
+        try self.nodes.ensureUnusedCapacity(self.alloc, 1);
+        return self.pushNodeAssumeCapacity(node);
+    }
+
     pub inline fn pushIf(self: *AST, condition: u16, then_part: u16, else_part: u16) !u16 {
         try self.ifs.ensureUnusedCapacity(1);
-        try self.nodes.ensureUnusedCapacity(1);
+        try self.nodes.ensureUnusedCapacity(self.alloc, 1);
         return self.pushIfAssumeCapacity(condition, then_part, else_part);
     }
 
@@ -524,6 +537,13 @@ const AST = struct {
         });
     }
 
+    pub inline fn name(self: *AST, name_index: u16) !u16 {
+        return try self.pushNode(.{
+            .tag = .name_lookup,
+            .data = .{ .lhs = name_index, .rhs = 0 },
+        });
+    }
+
     pub inline fn nameAssumeCapacity(self: *AST, name_index: u16) u16 {
         return self.pushNodeAssumeCapacity(.{
             .tag = .name_lookup,
@@ -533,9 +553,9 @@ const AST = struct {
 
     // Pushes a new declaration, ensuring firsrt that there is enough allocation space.
     pub inline fn decl(self: *AST, name_index: u16, args: []const Node, res: u16, clauses: []const Node) !u16 {
-        try self.nodes.ensureUnusedCapacity(args.len + clauses.len + 1);
+        try self.nodes.ensureUnusedCapacity(self.alloc, args.len + clauses.len + 1);
         try self.decl_infos.ensureUnusedCapacity(1);
-        return self.declAssumeCapacity(self, name_index, args, res, clauses);
+        return self.declAssumeCapacity(name_index, args, res, clauses);
     }
 
     // Pushes a new declaration assuming there is allocated space for:
@@ -694,6 +714,15 @@ const ScopeEnv = struct {
     const Self = @This();
 
     const HintMap = std.StringHashMapUnmanaged(Ty);
+    pub fn format_hintmap(self: *const Self, w: anytype, ast: *const AST, env: *const NamedEnv) void {
+        std.fmt.format(w, "hints in current scope:\n", .{}) catch {};
+        var iter = self.scopes.items[self.current_scope].hints.iterator();
+        while (iter.next()) |i| {
+            std.fmt.format(w, "{s} = ", .{i.key_ptr.*}) catch {};
+            format_ty(w, i.value_ptr.*, env, ast) catch {};
+            std.fmt.format(w, "\n", .{}) catch {};
+        }
+    }
 
     const Scope = struct {
         parent: ?ScopeIndex,
@@ -718,14 +747,6 @@ const ScopeEnv = struct {
             }
 
             return get_or_put.value_ptr.*;
-        }
-
-        pub fn search_hint(self: *const Scope, scopes: []const Scope, name: []const u8) ?Ty {
-            var current: ?*const Scope = self;
-            return while (current) |scope| {
-                if (scope.hints.get(name)) |n| break n;
-                current = if (scope.parent) |p| &scopes[p] else null;
-            } else null;
         }
     };
 
@@ -792,7 +813,10 @@ const ScopeEnv = struct {
             const found_hint = gethint: {
                 var current_scope = self.current_scope;
                 break :gethint while (true) {
-                    if (self.scopes.items[current_scope].hints.get(name)) |h| break h;
+                    if (self.scopes.items[current_scope].hints.get(name)) |h|
+                        break h: {
+                            break :h h;
+                        };
                     if (self.scopes.items[current_scope].parent) |p| {
                         current_scope = p;
                     } else break null;
@@ -886,7 +910,10 @@ fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeB
         .apply => {
             const info = ast.nodes.items(.data)[index].as_apply();
             // if the function is a lookup, use 'get', not 'define', which would be used in `walk_pattern`.
-            const func = if (ast.nodes.items(.tag)[info.func] == .name_lookup) try scope_env.get(ast.as_name(ast.nodes.items(.data)[info.func].as_ref()), env) else try walk_pattern(info.func, ast, scope_env, types, env, equations);
+            const func = if (ast.nodes.items(.tag)[info.func] == .name_lookup)
+                try scope_env.get(ast.as_name(ast.nodes.items(.data)[info.func].as_ref()), env)
+            else
+                try walk_pattern(info.func, ast, scope_env, types, env, equations);
             const arg = try walk_pattern(info.arg, ast, scope_env, types, env, equations);
 
             try equations.ensureUnusedCapacity(1);
@@ -911,7 +938,6 @@ fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeB
     }
 }
 
-// TODO: this walking is wrong. We first have to define *all* the names for a scope and
 fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(Equation)) !void {
     const datas = ast.nodes.items(.data);
     const decl = datas[index].as_decl(index, ast);
@@ -1064,7 +1090,7 @@ fn format_ast_node(writer: anytype, index: u16, ast: *const AST) !void {
 
 const Input = struct {
     all: []const u8,
-    start: usize,
+    start: u32,
 
     pub fn init(input: []const u8) Input {
         return .{ .all = input, .start = 0 };
@@ -1078,6 +1104,89 @@ const Input = struct {
         self.start += 1;
     }
 };
+
+const ASTBuilder = struct {
+    const Self = @This();
+
+    pub const NameInfo = struct { lookup_node: u16, name_index: u16 };
+
+    ast: *AST,
+    name_cache: std.StringHashMapUnmanaged(NameInfo),
+    // the AST and the Parser have distinct allocs since the parser cache will be
+    // cleaned right after we're done with parsing.
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator, ast: *AST) Self {
+        return .{ .ast = ast, .name_cache = .{}, .alloc = alloc };
+    }
+
+    pub fn cachedNameAssumeCapacity(self: *Self, name: []const u8) NameInfo {
+        const get_or_put = self.lookup_node_cache.getOrPutAssumeCapacity(name);
+        if (!get_or_put.found_existing) {
+            const index = @truncate(u16, self.ast.names.len);
+            self.ast.names.appendAssumeCapacity(name);
+            const node = self.ast.nameAssumeCapacity(index);
+            const info = NameInfo{ .lookup_node = node, .name_index = index };
+            get_or_put.value_ptr.* = info;
+            return info;
+        } else {
+            return get_or_put.value_ptr.*;
+        }
+    }
+
+    pub fn cachedName(self: *Self, name: []const u8) !NameInfo {
+        const get_or_put = try self.name_cache.getOrPut(self.alloc, name);
+        if (!get_or_put.found_existing) {
+            const index = @truncate(u16, self.ast.names.items.len);
+            try self.ast.names.append(name);
+            const node = try self.ast.name(index);
+            const info = NameInfo{ .lookup_node = node, .name_index = index };
+            get_or_put.value_ptr.* = info;
+            return info;
+        } else {
+            return get_or_put.value_ptr.*;
+        }
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.name_cache.deinit(self.alloc);
+    }
+};
+
+fn build_unify_2(builder: *ASTBuilder) !u16 {
+    // unify (Inference a) k = if occurs a k then Left (CyclicType k) else Right
+    // (Infer a k)
+
+    const a = try builder.cachedName("a");
+    const inference_lookup = try builder.cachedName("Inference");
+    const k = try builder.cachedName("k");
+    const left = try builder.cachedName("Left");
+    const cyclic_type = try builder.cachedName("CyclicType");
+    const infer = try builder.cachedName("Infer");
+    const right = try builder.cachedName("Right");
+    const occurs_ = try builder.cachedName("occurs");
+    const unify = try builder.cachedName("unify");
+
+    const else_part = try builder.ast.apply(
+        right.lookup_node,
+        try builder.ast.apply(try builder.ast.apply(infer.lookup_node, a.lookup_node), k.lookup_node),
+    );
+
+    const then_part = try builder.ast.apply(
+        left.lookup_node,
+        try builder.ast.apply(cyclic_type.lookup_node, k.lookup_node),
+    );
+
+    const condition = try builder.ast.apply(try builder.ast.apply(occurs_.lookup_node, a.lookup_node), k.lookup_node);
+
+    const res = try builder.ast.pushIf(condition, then_part, else_part);
+
+    // I need two fresh nodes here
+    const arg0 = AST.Node.apply(inference_lookup.lookup_node, a.lookup_node);
+    const arg1 = AST.Node.lookup(k.name_index);
+
+    return try builder.ast.decl(unify.name_index, &.{ arg0, arg1 }, res, &.{});
+}
 
 fn build_unify_1(ast: *AST) !u16 {
 
@@ -1158,6 +1267,7 @@ pub fn main() !void {
 
     var ast = AST.init(arena.allocator());
     defer ast.deinit();
+
     var ty_builder = TypeBuilder.init(arena.allocator());
     defer ty_builder.deinit();
 
@@ -1190,6 +1300,11 @@ pub fn main() !void {
             } };
         };
 
+        const unify_error_a = build_unify_err: {
+            const start = try env.core_env.insert_ty(a_typevar);
+            break :build_unify_err Ty{ .bound = .{ .id = try ty_builder.bound_id("UnifyError", &env), .range = .{ .start = start, .end = start + 1 } } };
+        };
+
         const either_e_a = build_either: {
             const bound_id = try ty_builder.bound_id("Either", &env);
             const start = try env.core_env.insert_ty(e_typevar);
@@ -1206,6 +1321,15 @@ pub fn main() !void {
             const start = try env.core_env.insert_ty(a_typevar);
             _ = try env.core_env.insert_ty(either_e_a);
             break :mkRight .{ .bound = .{
+                .id = func_bound_id,
+                .range = .{ .start = start, .end = start + 2 },
+            } };
+        });
+
+        try scope_env.add_hint("Left", mkLeft: {
+            const start = try env.core_env.insert_ty(e_typevar);
+            _ = try env.core_env.insert_ty(either_e_a);
+            break :mkLeft .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
             } };
@@ -1238,6 +1362,14 @@ pub fn main() !void {
                 .range = .{ .start = start, .end = start + 1 },
             } };
         };
+        try scope_env.add_hint("CyclicType", mkCT: {
+            const start = try env.core_env.insert_ty(inference_ty_a);
+            _ = try env.core_env.insert_ty(unify_error_a);
+            break :mkCT .{ .bound = .{
+                .id = func_bound_id,
+                .range = .{ .start = start, .end = start + 2 },
+            } };
+        });
 
         try scope_env.add_hint("Infer", build_infer: {
             // InferenceTy a -> UnifyEvent a
@@ -1289,22 +1421,33 @@ pub fn main() !void {
         //        });
     }
 
+    scope_env.format_hintmap(stdout, &ast, &env);
+
     // constraints also go into GPA since its allocations are sporadic.
     var constraints = std.ArrayList(Equation).init(gpa.allocator());
 
     const unify_1_index = try build_unify_1(&ast);
 
-    try walk_decl(unify_1_index, &ast, &scope_env, &ty_builder, &env, &constraints);
+    var ast_arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    var ast_builder = ASTBuilder.init(ast_arena.allocator(), &ast);
+
+    const unify_2_index = try build_unify_2(&ast_builder);
+    ast_builder.deinit();
+    ast_arena.deinit();
+
+    stdout.print("unify2: ", .{}) catch {};
+    format_ast_node(stdout, unify_2_index, &ast) catch {};
+    stdout.print("\n", .{}) catch {};
+    try bw.flush();
+
+    //try walk_decl(unify_1_index, &ast, &scope_env, &ty_builder, &env, &constraints);
+    try walk_decl(unify_2_index, &ast, &scope_env, &ty_builder, &env, &constraints);
+
 
     stdout.print("ast: ", .{}) catch {};
     format_ast_node(stdout, unify_1_index, &ast) catch {};
     stdout.print("\n", .{}) catch {};
     try bw.flush();
-
-    //std.debug.print("constraints:\n", .{});
-    //try format_constraints(stdout, constraints.items, &env, &ast);
-    //stdout.print("\n\n", .{}) catch {};
-    //try bw.flush();
 
     var result = try solve(constraints, &env.core_env);
 
