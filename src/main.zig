@@ -147,9 +147,24 @@ fn solve(constraints: std.ArrayList(Equation), env: *CoreEnv) !InferenceResult {
             .inference => |inf| if (occurs(inf, eq.rhs, env)) {
                 try errors.append(.{ .cyclic_type = eq.rhs });
             } else {
-                substitute(inf, eq.rhs, env);
+                // if we're overwriting something, make sure it's equal!
+                if (try inferences.fetchPut(inf, eq.rhs)) |kv| {
+                    try equations.append(.{ .lhs = kv.value, .rhs = eq.rhs });
+                }
 
-                try inferences.put(inf, eq.rhs);
+                {
+                    var it = inferences.iterator();
+                    while (it.next()) |kv| {
+                        switch (kv.value_ptr.*) {
+                            .inference => |r| if (r == inf) {
+                                kv.value_ptr.* = eq.rhs;
+                            },
+                            else => {},
+                        }
+                    }
+                }
+
+                substitute(inf, eq.rhs, env);
             },
         }
     }
@@ -316,12 +331,14 @@ const NamedEnv = struct {
                         .inference => |id| {
                             if (self.inferences.items[id].tag == .typevar) {
                                 const get_or_put = try inference_map.getOrPut(id);
-                                if (!get_or_put.found_existing) {
-                                    // copy the inference, but make it another id
+                                const inf = if (!get_or_put.found_existing) putnew: {
+                                    // copy the inference, but make it another ID.
                                     const name = self.variables.items[self.inferences.items[id].index];
-                                    get_or_put.value_ptr.* = try self.variable(.typevar, name);
-                                }
-                                try results.append(.{ .inference = get_or_put.value_ptr.* });
+                                    const new_inference = try self.variable(.typevar, name);
+                                    get_or_put.value_ptr.* = new_inference;
+                                    break :putnew new_inference;
+                                } else get_or_put.value_ptr.*;
+                                try results.append(.{ .inference = inf });
                             } else {
                                 // leave it alone, since it's not a typevar.
                                 try results.append(to_instantiate);
