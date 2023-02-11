@@ -1,77 +1,8 @@
 const std = @import("std");
 
-const WorldRange = struct {
-    start: u16,
-    end: u16,
+const core = @import("core.zig");
 
-    pub fn is_empty(self: WorldRange) bool {
-        return self.start >= self.end;
-    }
-
-    pub fn len(self: WorldRange) u16 {
-        return self.end - self.start;
-    }
-
-    pub fn empty() WorldRange {
-        return .{ .start = 0, .end = 0 };
-    }
-};
-
-const Ty = union(enum(u1)) {
-    inference: u16,
-    bound: struct {
-        id: u16,
-        range: WorldRange,
-    },
-
-    pub fn has_bound_args(self: Ty) bool {
-        return switch (self) {
-            .bound => |bound| !bound.range.is_empty(),
-            else => false,
-        };
-    }
-};
-
-const CoreEnv = struct {
-    // only some types require to be stored, in order to reference them
-    // when looping through a bound type.
-    tys: std.ArrayList(Ty),
-
-    pub fn init(alloc: std.mem.Allocator) CoreEnv {
-        return .{ .tys = std.ArrayList(Ty).init(alloc) };
-    }
-
-    pub fn deinit(self: *CoreEnv) void {
-        self.tys.deinit();
-    }
-
-    pub fn clone(self: *CoreEnv, ty: Ty) !Ty {
-        switch (ty) {
-            // inferences can be copied just fine.
-            .inference => |id| return .{ .inference = id },
-            // but these ones... we have to create copies of them.
-            .bound => |bound| {
-                try self.tys.ensureUnusedCapacity(bound.range.len());
-                const start = @truncate(u16, self.tys.items.len);
-
-                var i = bound.range.start;
-                while (i != bound.range.end) : (i += 1) {
-                    const child_ty = try self.clone(self.tys.items[i]);
-                    self.tys.appendAssumeCapacity(child_ty);
-                }
-                const end = @truncate(u16, self.tys.items.len);
-
-                return .{ .bound = .{ .id = bound.id, .range = .{ .start = start, .end = end } } };
-            },
-        }
-    }
-
-    pub fn insert_ty(self: *CoreEnv, ty: Ty) !u16 {
-        const id = self.tys.items.len;
-        try self.tys.append(ty);
-        return @truncate(u16, id);
-    }
-};
+const Ty = core.Ty;
 
 const Equation = struct {
     lhs: Ty,
@@ -109,7 +40,7 @@ const InferenceResult = struct {
     }
 };
 
-fn solve(constraints: std.ArrayList(Equation), env: *CoreEnv) !InferenceResult {
+fn solve(constraints: std.ArrayList(Equation), env: *core.Env) !InferenceResult {
     var equations = constraints;
     defer equations.deinit();
 
@@ -137,15 +68,15 @@ fn solve(constraints: std.ArrayList(Equation), env: *CoreEnv) !InferenceResult {
                         }
                     }
                 },
-                .inference => |inf| if (occurs(inf, eq.lhs, env)) {
+                .inference => |inf| if (core.occurs(inf, eq.lhs, env)) {
                     try errors.append(.{ .cyclic_type = eq.lhs });
                 } else {
-                    substitute(inf, eq.lhs, env);
+                    core.substitute(inf, eq.lhs, env);
 
                     try inferences.put(inf, eq.lhs);
                 },
             },
-            .inference => |inf| if (occurs(inf, eq.rhs, env)) {
+            .inference => |inf| if (core.occurs(inf, eq.rhs, env)) {
                 try errors.append(.{ .cyclic_type = eq.rhs });
             } else {
                 // if we're overwriting something, make sure it's equal!
@@ -165,7 +96,7 @@ fn solve(constraints: std.ArrayList(Equation), env: *CoreEnv) !InferenceResult {
                     }
                 }
 
-                substitute(inf, eq.rhs, env);
+                core.substitute(inf, eq.rhs, env);
             },
         }
     }
@@ -178,80 +109,13 @@ const InferenceError = union(enum(u1)) {
     unsolvable_equation: Equation,
 };
 
-fn occurs(inference: u16, ty: Ty, env: *const CoreEnv) bool {
-    return switch (ty) {
-        .inference => |id| {
-            return id == inference;
-        },
-        .bound => |bound| {
-            var i = bound.range.start;
-            while (i != bound.range.end) : (i += 1) {
-                if (occurs(inference, env.tys.items[i], env)) return true;
-            }
-            return false;
-        },
-    };
-}
-
-fn format_core_ty(writer: anytype, ty: Ty, env: *const CoreEnv) !void {
-    switch (ty) {
-        .inference => |id| {
-            try std.fmt.format(writer, "'{}", .{id});
-        },
-        .bound => |bound| {
-            try std.fmt.format(writer, "#{}", .{bound.id});
-            if (!bound.range.is_empty()) {
-                _ = try writer.write("<");
-                try format_core_ty(writer, env.tys.items[bound.range.start], env);
-                for (env.tys.items[bound.range.start + 1 .. bound.range.end]) |child| {
-                    _ = try writer.write(", ");
-                    try format_core_ty(writer, child, env);
-                }
-                _ = try writer.write(">");
-            }
-        },
-    }
-}
-
-fn types_eq(a: Ty, b: Ty, env: *const CoreEnv) bool {
-    return switch (a) {
-        .inference => |id_a| switch (b) {
-            .inference => |id_b| id_a == id_b,
-            else => false,
-        },
-        .bound => |bound_a| switch (b) {
-            .bound => |bound_b| {
-                if (bound_b.id != bound_a.id) return false;
-
-                if (bound_a.range.len() != bound_b.range.len()) return false;
-
-                var i: u16 = 0;
-                return while (i != bound_a.range.len()) : (i += 1) {
-                    if (!types_eq(env.tys.items[bound_a.range.start + i], env.tys.items[bound_b.range.start + i], env)) break false;
-                } else true;
-            },
-            else => false,
-        },
-    };
-}
-
-fn substitute(inference: u16, target: Ty, env: *CoreEnv) void {
-    for (env.tys.items) |*ty| {
-        switch (ty.*) {
-            .inference => |r| if (r == inference) {
-                ty.* = target;
-            },
-            else => {},
-        }
-    }
-}
-
 // named env
 const NamedEnv = struct {
-    core_env: CoreEnv,
+    core_env: core.Env,
     inferences: std.ArrayList(Inference),
     variables: std.ArrayList(Variable),
     bound_names: std.ArrayList([]const u8),
+    alloc: std.mem.Allocator,
 
     const Inference = struct {
         pub const Tag = enum(u2) { variable, typevar, unknown_expr, expr };
@@ -263,11 +127,11 @@ const NamedEnv = struct {
     const Variable = []const u8;
 
     pub fn init(alloc: std.mem.Allocator) NamedEnv {
-        return .{ .core_env = CoreEnv.init(alloc), .inferences = std.ArrayList(Inference).init(alloc), .variables = std.ArrayList(Variable).init(alloc), .bound_names = std.ArrayList([]const u8).init(alloc) };
+        return .{ .core_env = core.Env.init(), .inferences = std.ArrayList(Inference).init(alloc), .variables = std.ArrayList(Variable).init(alloc), .bound_names = std.ArrayList([]const u8).init(alloc), .alloc = alloc };
     }
 
     pub fn deinit(self: *NamedEnv) void {
-        self.core_env.deinit();
+        self.core_env.deinit(self.alloc);
         self.inferences.deinit();
         self.variables.deinit();
         self.bound_names.deinit();
@@ -356,7 +220,7 @@ const NamedEnv = struct {
                     }
                 },
                 .bind => |info| {
-                    try self.core_env.tys.ensureUnusedCapacity(info.count);
+                    try self.core_env.tys.ensureUnusedCapacity(self.alloc, info.count);
                     const start = @truncate(u16, self.core_env.tys.items.len);
 
                     // since the results are produced into the stack in reverse order, popping them again
@@ -835,7 +699,7 @@ const ScopeEnv = struct {
 };
 
 fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *NamedEnv) !Equation {
-    try env.core_env.tys.ensureUnusedCapacity(2);
+    try env.core_env.tys.ensureUnusedCapacity(env.alloc, 2);
     const bound_id = try types.bound_id("(->)", env);
     const start = @truncate(u16, env.core_env.tys.items.len);
     env.core_env.tys.appendAssumeCapacity(b);
@@ -871,7 +735,7 @@ fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuil
             const condition = try walk_expr(info.condition, ast, scope_env, types, env, equations);
             const then_part = try walk_expr(info.then_part, ast, scope_env, types, env, equations);
             const else_part = try walk_expr(info.else_part, ast, scope_env, types, env, equations);
-            const bool_ty = .{ .bound = .{ .id = try types.bound_id("Bool", env), .range = WorldRange.empty() } };
+            const bool_ty = .{ .bound = .{ .id = try types.bound_id("Bool", env), .range = core.Range.empty() } };
             try equations.ensureUnusedCapacity(3);
             // condition must be bool
             equations.appendAssumeCapacity(.{ .lhs = condition, .rhs = bool_ty });
@@ -1289,11 +1153,11 @@ pub fn main() !void {
     {
         const a_typevar = Ty{ .inference = try env.variable(.typevar, "a") };
         const e_typevar = Ty{ .inference = try env.variable(.typevar, "e") };
-        const bool_ty = Ty{ .bound = .{ .id = try ty_builder.bound_id("Bool", &env), .range = WorldRange.empty() } };
+        const bool_ty = Ty{ .bound = .{ .id = try ty_builder.bound_id("Bool", &env), .range = core.Range.empty() } };
         const func_bound_id = try ty_builder.bound_id("(->)", &env);
 
         const unify_event_a = build_unify_ev: {
-            const start = try env.core_env.insert_ty(a_typevar);
+            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
             break :build_unify_ev Ty{ .bound = .{
                 .id = try ty_builder.bound_id("UnifyEvent", &env),
                 .range = .{ .start = start, .end = start + 1 },
@@ -1301,14 +1165,14 @@ pub fn main() !void {
         };
 
         const unify_error_a = build_unify_err: {
-            const start = try env.core_env.insert_ty(a_typevar);
+            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
             break :build_unify_err Ty{ .bound = .{ .id = try ty_builder.bound_id("UnifyError", &env), .range = .{ .start = start, .end = start + 1 } } };
         };
 
         const either_e_a = build_either: {
             const bound_id = try ty_builder.bound_id("Either", &env);
-            const start = try env.core_env.insert_ty(e_typevar);
-            _ = try env.core_env.insert_ty(a_typevar);
+            const start = try env.core_env.insert_ty(env.alloc, e_typevar);
+            _ = try env.core_env.insert_ty(env.alloc, a_typevar);
             break :build_either Ty{ .bound = .{
                 .id = bound_id,
                 .range = .{ .start = start, .end = start + 2 },
@@ -1318,8 +1182,8 @@ pub fn main() !void {
         //        try scope_env.add_hint("Empty", unify_event_a);
 
         try scope_env.add_hint("Right", mkRight: {
-            const start = try env.core_env.insert_ty(a_typevar);
-            _ = try env.core_env.insert_ty(either_e_a);
+            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
+            _ = try env.core_env.insert_ty(env.alloc, either_e_a);
             break :mkRight .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
@@ -1327,8 +1191,8 @@ pub fn main() !void {
         });
 
         try scope_env.add_hint("Left", mkLeft: {
-            const start = try env.core_env.insert_ty(e_typevar);
-            _ = try env.core_env.insert_ty(either_e_a);
+            const start = try env.core_env.insert_ty(env.alloc, e_typevar);
+            _ = try env.core_env.insert_ty(env.alloc, either_e_a);
             break :mkLeft .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
@@ -1339,14 +1203,14 @@ pub fn main() !void {
 
         {
             const a2bool = a2bool: {
-                const start = try env.core_env.insert_ty(a_typevar);
-                _ = try env.core_env.insert_ty(bool_ty);
+                const start = try env.core_env.insert_ty(env.alloc, a_typevar);
+                _ = try env.core_env.insert_ty(env.alloc, bool_ty);
                 break :a2bool Ty{ .bound = .{ .id = func_bound_id, .range = .{ .start = start, .end = start + 2 } } };
             };
 
             const eq = eq: {
-                const start = try env.core_env.insert_ty(a_typevar);
-                _ = try env.core_env.insert_ty(a2bool);
+                const start = try env.core_env.insert_ty(env.alloc, a_typevar);
+                _ = try env.core_env.insert_ty(env.alloc, a2bool);
                 break :eq Ty{ .bound = .{ .id = func_bound_id, .range = .{ .start = start, .end = start + 2 } } };
             };
 
@@ -1356,15 +1220,15 @@ pub fn main() !void {
         const inference_ty_id = try ty_builder.bound_id("InferenceTy", &env);
 
         const inference_ty_a = inference_ty: {
-            const start = try env.core_env.insert_ty(a_typevar);
+            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
             break :inference_ty Ty{ .bound = .{
                 .id = inference_ty_id,
                 .range = .{ .start = start, .end = start + 1 },
             } };
         };
         try scope_env.add_hint("CyclicType", mkCT: {
-            const start = try env.core_env.insert_ty(inference_ty_a);
-            _ = try env.core_env.insert_ty(unify_error_a);
+            const start = try env.core_env.insert_ty(env.alloc, inference_ty_a);
+            _ = try env.core_env.insert_ty(env.alloc, unify_error_a);
             break :mkCT .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
@@ -1373,12 +1237,12 @@ pub fn main() !void {
 
         try scope_env.add_hint("Infer", build_infer: {
             // InferenceTy a -> UnifyEvent a
-            const middle_param = try env.core_env.insert_ty(inference_ty_a);
-            _ = try env.core_env.insert_ty(unify_event_a);
+            const middle_param = try env.core_env.insert_ty(env.alloc, inference_ty_a);
+            _ = try env.core_env.insert_ty(env.alloc, unify_event_a);
 
             // a -> (InferenceTy a -> UnifyEvent a)
-            const start = try env.core_env.insert_ty(a_typevar);
-            _ = try env.core_env.insert_ty(.{ .bound = .{
+            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
+            _ = try env.core_env.insert_ty(env.alloc, .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = middle_param, .end = middle_param + 2 },
             } });
@@ -1389,8 +1253,8 @@ pub fn main() !void {
         });
 
         try scope_env.add_hint("Inference", inference: {
-            const start = try env.core_env.insert_ty(a_typevar);
-            _ = try env.core_env.insert_ty(inference_ty_a);
+            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
+            _ = try env.core_env.insert_ty(env.alloc, inference_ty_a);
             break :inference .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
@@ -1398,22 +1262,22 @@ pub fn main() !void {
         });
 
         //        const list_of_inference_ty_a = mklist: {
-        //            const start = try env.core_env.insert_ty(inference_ty_a);
+        //            const start = try env.core_env.insert_ty(env.alloc, inference_ty_a);
         //            break :mklist Ty{ .bound = .{ .bound_id = list_bound_id, .bound_range = .{ .start = start, .end = start + 1 } } };
         //        };
         //
         //        try scope_env.add_hint("Bound", mkBound: {
         //            const func_list_to_a = mkList2a: {
-        //                const start = try env.core_env.insert_ty(list_of_inference_ty_a);
-        //                _ = try env.core_env.insert_ty(inference_ty_a);
+        //                const start = try env.core_env.insert_ty(env.alloc, list_of_inference_ty_a);
+        //                _ = try env.core_env.insert_ty(env.alloc, inference_ty_a);
         //                break :mkList2a Ty{ .bound = .{
         //                    .bound_id = func_bound_id,
         //                    .bound_range = .{ .start = start, .end = start + 2 },
         //                } };
         //            };
         //
-        //            const start = try env.core_env.insert_ty(a_typevar);
-        //            _ = try env.core_env.insert_ty(func_list_to_a);
+        //            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
+        //            _ = try env.core_env.insert_ty(env.alloc, func_list_to_a);
         //            break :mkBound .{ .bound = .{
         //                .bound_id = func_bound_id,
         //                .bound_range = .{ .start = start, .end = start + 2 },
