@@ -1,18 +1,11 @@
 const std = @import("std");
 
 const core = @import("core.zig");
+const solver = @import("solver.zig");
 
 const Ty = core.Ty;
 
-const Equation = struct {
-    lhs: Ty,
-    rhs: Ty,
-};
-
-// TODO: consider array hash map: https://devlog.hexops.com/2022/zig-hashmaps-explained/
-const InferenceMap = std.AutoHashMap(u16, Ty);
-
-fn drop_temps(inferences: *InferenceMap, env: *const NamedEnv) !void {
+fn drop_temps(inferences: *solver.Map, env: *const NamedEnv) !void {
     var dropped = std.ArrayList(u16).init(inferences.allocator);
     defer {
         for (dropped.items) |dropped_k| {
@@ -29,85 +22,6 @@ fn drop_temps(inferences: *InferenceMap, env: *const NamedEnv) !void {
         }
     }
 }
-
-const InferenceResult = struct {
-    errors: std.ArrayList(InferenceError),
-    inferences: InferenceMap,
-
-    pub fn deinit(self: *InferenceResult) void {
-        self.errors.deinit();
-        self.inferences.deinit();
-    }
-};
-
-fn solve(constraints: std.ArrayList(Equation), env: *core.Env) !InferenceResult {
-    var equations = constraints;
-    defer equations.deinit();
-
-    var inferences = InferenceMap.init(constraints.allocator);
-    var errors = std.ArrayList(InferenceError).init(constraints.allocator);
-    errdefer errors.deinit();
-
-    while (equations.popOrNull()) |eq| {
-        switch (eq.lhs) {
-            .bound => |lhs_bound| switch (eq.rhs) {
-                .bound => |rhs_bound| {
-                    if (lhs_bound.id != rhs_bound.id) {
-                        try errors.append(.{ .unsolvable_equation = eq });
-                    } else {
-                        // NOTE: currently this assumes that bounds have the
-                        // same applied argumnets. For arbitrary arguments some
-                        // modifications are needed.
-                        try equations.ensureUnusedCapacity(lhs_bound.range.len());
-                        var i: u16 = 0;
-                        while (i != lhs_bound.range.len()) : (i += 1) {
-                            equations.appendAssumeCapacity(.{
-                                .lhs = env.tys.items[lhs_bound.range.start + i],
-                                .rhs = env.tys.items[rhs_bound.range.start + i],
-                            });
-                        }
-                    }
-                },
-                .inference => |inf| if (core.occurs(inf, eq.lhs, env)) {
-                    try errors.append(.{ .cyclic_type = eq.lhs });
-                } else {
-                    core.substitute(inf, eq.lhs, env);
-
-                    try inferences.put(inf, eq.lhs);
-                },
-            },
-            .inference => |inf| if (core.occurs(inf, eq.rhs, env)) {
-                try errors.append(.{ .cyclic_type = eq.rhs });
-            } else {
-                // if we're overwriting something, make sure it's equal!
-                if (try inferences.fetchPut(inf, eq.rhs)) |kv| {
-                    try equations.append(.{ .lhs = kv.value, .rhs = eq.rhs });
-                }
-
-                {
-                    var it = inferences.iterator();
-                    while (it.next()) |kv| {
-                        switch (kv.value_ptr.*) {
-                            .inference => |r| if (r == inf) {
-                                kv.value_ptr.* = eq.rhs;
-                            },
-                            else => {},
-                        }
-                    }
-                }
-
-                core.substitute(inf, eq.rhs, env);
-            },
-        }
-    }
-
-    return .{ .inferences = inferences, .errors = errors };
-}
-
-const InferenceError = union(enum(u1)) {
-    cyclic_type: Ty,
-    unsolvable_equation: Equation,
-};
 
 // named env
 const NamedEnv = struct {
@@ -505,7 +419,7 @@ fn format_ty(writer: anytype, ty: Ty, env: *const NamedEnv, ast: *const AST) !vo
     }
 }
 
-fn format_inferences(writer: anytype, inferences: *const InferenceMap, env: *const NamedEnv, ast: *const AST) !void {
+fn format_inferences(writer: anytype, inferences: *const solver.Map, env: *const NamedEnv, ast: *const AST) !void {
     _ = try writer.write("inferences:\n");
     var it = inferences.iterator();
     while (it.next()) |entry| {
@@ -516,13 +430,13 @@ fn format_inferences(writer: anytype, inferences: *const InferenceMap, env: *con
     }
 }
 
-fn format_error(writer: anytype, err: InferenceError, env: *const NamedEnv, ast: *const AST) !void {
+fn format_error(writer: anytype, err: solver.Error, env: *const NamedEnv, ast: *const AST) !void {
     switch (err) {
         .cyclic_type => |ty| {
             _ = try writer.write("cyclic type: ");
             try format_ty(writer, ty, env, ast);
         },
-        .unsolvable_equation => |eq| {
+        .unequal_bounds => |eq| {
             _ = try writer.write("Cannot equate ");
             try format_ty(writer, eq.lhs, env, ast);
             _ = try writer.write(" to ");
@@ -531,7 +445,7 @@ fn format_error(writer: anytype, err: InferenceError, env: *const NamedEnv, ast:
     }
 }
 
-fn format_result(writer: anytype, results: *const InferenceResult, env: *const NamedEnv, ast: *const AST) !void {
+fn format_result(writer: anytype, results: *const solver.Result, env: *const NamedEnv, ast: *const AST) !void {
     _ = try writer.write("errors:\n");
     for (results.errors.items) |err| {
         try format_error(writer, err, env, ast);
@@ -698,7 +612,7 @@ const ScopeEnv = struct {
     }
 };
 
-fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *NamedEnv) !Equation {
+fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *NamedEnv) !solver.Equation {
     try env.core_env.tys.ensureUnusedCapacity(env.alloc, 2);
     const bound_id = try types.bound_id("(->)", env);
     const start = @truncate(u16, env.core_env.tys.items.len);
@@ -711,7 +625,7 @@ fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *NamedEnv) !Equation {
     return .{ .lhs = a, .rhs = applied };
 }
 
-fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(Equation)) !Ty {
+fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(solver.Equation)) !Ty {
     switch (ast.nodes.items(.tag)[index]) {
         .name_lookup => {
             const name_index = ast.nodes.items(.data)[index].as_ref();
@@ -750,7 +664,7 @@ fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuil
 
 // patterns are like expressions plus the bind. Except that they 'unwrap' the expression instead of wrapping it.
 // To produce equations, it returns the type that would be after the construction has occurred.
-fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(Equation)) !Ty {
+fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(solver.Equation)) !Ty {
     switch (ast.nodes.items(.tag)[index]) {
         // a 'lookup' in pattern context just means that we're defining a variable
         // well, not really. It might be also used for applying constructors that need to be a lookup...
@@ -802,7 +716,7 @@ fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeB
     }
 }
 
-fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(Equation)) !void {
+fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(solver.Equation)) !void {
     const datas = ast.nodes.items(.data);
     const decl = datas[index].as_decl(index, ast);
     // first, make a definition for the declaration
@@ -866,7 +780,7 @@ fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, e
     try equations.append(.{ .lhs = lhs, .rhs = rhs });
 }
 
-fn format_constraints(writer: anytype, constraints: []const Equation, env: *const NamedEnv, ast: *const AST) !void {
+fn format_constraints(writer: anytype, constraints: []const solver.Equation, env: *const NamedEnv, ast: *const AST) !void {
     for (constraints) |c| {
         try format_ty(writer, c.lhs, env, ast);
         _ = try writer.write(" = ");
@@ -1288,7 +1202,7 @@ pub fn main() !void {
     scope_env.format_hintmap(stdout, &ast, &env);
 
     // constraints also go into GPA since its allocations are sporadic.
-    var constraints = std.ArrayList(Equation).init(gpa.allocator());
+    var constraints = std.ArrayList(solver.Equation).init(gpa.allocator());
 
     const unify_1_index = try build_unify_1(&ast);
 
@@ -1312,7 +1226,7 @@ pub fn main() !void {
     stdout.print("\n", .{}) catch {};
     try bw.flush();
 
-    var result = try solve(constraints, &env.core_env);
+    var result = try solver.solve(constraints, &env.core_env);
 
     try drop_temps(&result.inferences, &env);
     defer result.deinit();
