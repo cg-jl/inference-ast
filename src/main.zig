@@ -3,6 +3,7 @@ const std = @import("std");
 const core = @import("core.zig");
 const solver = @import("solver.zig");
 const named = @import("named.zig");
+const Ast = @import("ast.zig");
 
 const log = std.log.scoped(.main);
 
@@ -26,299 +27,33 @@ fn drop_temps(inferences: *solver.Map, env: *const named.Env) !void {
     }
 }
 
-// named env
-
-// AST
-
-const DeclInfo = struct {
-    name_index: u16,
-    // the patterns are directly adjacent to the node.
-    arg_count: u8, // NOTE: here we're supporting up to 256 arguments + 256 clauses PER declaration. We can surely shorten this.
-    // the clauses are directly to the left of the arguments.
-    clause_count: u8,
-    expr_id: u16,
-};
-
-const NodeKind = enum(u4) {
-    // lhs: declaration info index
-    decl,
-    // lhs: index to string table
-    // rhs: index to expr.
-    bind,
-    // lhs: index to function expr
-    // rhs: index to arg expr
-    apply,
-    // lhs: index to string table
-    name_lookup,
-    // nothing.
-    ignored,
-    // lhs: condition
-    // rhs: then & else in extra data
-    ifexpr,
-};
-
-const NodeData = struct {
-    lhs: u16,
-    rhs: u16,
-
-    pub fn as_ref(self: NodeData) u16 {
-        return self.lhs;
-    }
-
-    pub fn equals(self: NodeData, other: NodeData) bool {
-        return self.lhs == other.lhs and self.rhs == other.rhs;
-    }
-
-    const Decl = struct { name: []const u8, args_begin: u16, args_end: u16, clauses_begin: u16, clauses_end: u16, expr: u16 };
-
-    pub fn as_bind(self: NodeData, ast: *const AST) struct { name: []const u8, expr: u16 } {
-        return .{ .name = ast.as_name(self.lhs), .expr = self.rhs };
-    }
-
-    pub fn as_apply(self: NodeData) struct { func: u16, arg: u16 } {
-        return .{ .func = self.lhs, .arg = self.rhs };
-    }
-
-    pub fn as_decl(self: NodeData, index: u16, ast: *const AST) Decl {
-        const decl_info = ast.decl_infos.items[self.lhs];
-        return .{ .name = ast.as_name(decl_info.name_index), .args_begin = index - decl_info.arg_count, .args_end = index, .clauses_begin = index - decl_info.arg_count - decl_info.clause_count, .clauses_end = index - decl_info.arg_count, .expr = decl_info.expr_id };
-    }
-
-    pub fn as_if(self: NodeData, index: u16, ast: *const AST) struct { condition: u16, then_part: u16, else_part: u16 } {
-        const info = ast.ifs.items[self.rhs];
-        return .{ .condition = self.lhs, .then_part = index - info.then_distance, .else_part = index - info.else_distance };
-    }
-};
-
-const IfData = struct {
-    then_distance: u8,
-    else_distance: u8,
-};
-
-const AST = struct {
-    // NOTE: decl_infos, names and ifs could be all merged together.
-    decl_infos: std.ArrayList(DeclInfo),
-
-    nodes: std.MultiArrayList(Node),
-    names: std.ArrayList([]const u8),
-
-    ifs: std.ArrayList(IfData),
-    alloc: std.mem.Allocator,
-
-    pub const Node = struct {
-        tag: NodeKind,
-        data: NodeData,
-
-        pub inline fn apply(func: u16, arg: u16) Node {
-            return .{
-                .tag = .apply,
-                .data = .{ .lhs = func, .rhs = arg },
-            };
-        }
-
-        pub inline fn lookup(name_index: u16) Node {
-            return .{
-                .tag = .name_lookup,
-                .data = .{ .lhs = name_index, .rhs = 0 },
-            };
-        }
-    };
-
-    pub fn init(alloc: std.mem.Allocator) AST {
-        return .{
-            .decl_infos = std.ArrayList(DeclInfo).init(alloc),
-            .nodes = .{},
-            .names = std.ArrayList([]const u8).init(alloc),
-            .ifs = std.ArrayList(IfData).init(alloc),
-            .alloc = alloc,
-        };
-    }
-
-    pub fn deinit(self: *AST) void {
-        self.decl_infos.deinit();
-        self.nodes.deinit(self.alloc);
-    }
-
-    pub inline fn as_name(self: *const AST, name_index: u16) []const u8 {
-        return self.names.items[name_index];
-    }
-
-    pub inline fn apply(self: *AST, func: u16, arg: u16) !u16 {
-        try self.nodes.ensureUnusedCapacity(self.alloc, 1);
-        return self.applyAssumeCapacity(func, arg);
-    }
-
-    pub inline fn applyAssumeCapacity(self: *AST, func: u16, arg: u16) u16 {
-        return self.pushNodeAssumeCapacity(Node.apply(func, arg));
-    }
-
-    pub inline fn pushNodeAssumeCapacity(self: *AST, node: Node) u16 {
-        const idx = @truncate(u16, self.nodes.len);
-
-        self.nodes.appendAssumeCapacity(node);
-
-        return idx;
-    }
-
-    pub inline fn pushNode(self: *AST, node: Node) !u16 {
-        try self.nodes.ensureUnusedCapacity(self.alloc, 1);
-        return self.pushNodeAssumeCapacity(node);
-    }
-
-    pub inline fn pushIf(self: *AST, condition: u16, then_part: u16, else_part: u16) !u16 {
-        try self.ifs.ensureUnusedCapacity(1);
-        try self.nodes.ensureUnusedCapacity(self.alloc, 1);
-        return self.pushIfAssumeCapacity(condition, then_part, else_part);
-    }
-
-    // Pushes a new if expression, assuming there is allocated space for:
-    // - a node
-    // - an if data
-    pub fn pushIfAssumeCapacity(self: *AST, condition: u16, then_part: u16, else_part: u16) u16 {
-        const res = @truncate(u16, self.nodes.len);
-        const if_index = @truncate(u16, self.ifs.items.len);
-        self.ifs.appendAssumeCapacity(.{
-            .then_distance = @truncate(u8, res - then_part),
-            .else_distance = @truncate(u8, res - else_part),
-        });
-
-        return self.pushNodeAssumeCapacity(.{
-            .tag = .ifexpr,
-            .data = .{ .lhs = condition, .rhs = if_index },
-        });
-    }
-
-    pub inline fn name(self: *AST, name_index: u16) !u16 {
-        return try self.pushNode(.{
-            .tag = .name_lookup,
-            .data = .{ .lhs = name_index, .rhs = 0 },
-        });
-    }
-
-    pub inline fn nameAssumeCapacity(self: *AST, name_index: u16) u16 {
-        return self.pushNodeAssumeCapacity(.{
-            .tag = .name_lookup,
-            .data = .{ .lhs = name_index, .rhs = 0 },
-        });
-    }
-
-    // Pushes a new declaration, ensuring firsrt that there is enough allocation space.
-    pub inline fn decl(self: *AST, name_index: u16, args: []const Node, res: u16, clauses: []const Node) !u16 {
-        try self.nodes.ensureUnusedCapacity(self.alloc, args.len + clauses.len + 1);
-        try self.decl_infos.ensureUnusedCapacity(1);
-        return self.declAssumeCapacity(name_index, args, res, clauses);
-    }
-
-    // Pushes a new declaration assuming there is allocated space for:
-    // - all argument nodes that were deferred for insertion
-    // - all clause nodes that were deferred for insertion
-    // - the final declaration node
-    // - one more space in decl_infos for the declaration information.
-    pub fn declAssumeCapacity(self: *AST, name_index: u16, args: []const Node, res: u16, clauses: []const Node) u16 {
-        // first, add the clauses
-        for (clauses) |clause| {
-            _ = self.pushNodeAssumeCapacity(clause);
-        }
-
-        // then, add the args
-        for (args) |arg| {
-            _ = self.pushNodeAssumeCapacity(arg);
-        }
-
-        const decl_info_index = @truncate(u16, self.decl_infos.items.len);
-        // now add the decl info
-        self.decl_infos.appendAssumeCapacity(.{ .name_index = name_index, .arg_count = @truncate(u8, args.len), .clause_count = @truncate(u8, clauses.len), .expr_id = res });
-
-        return self.pushNodeAssumeCapacity(.{ .tag = .decl, .data = .{
-            .lhs = decl_info_index,
-            .rhs = 0,
-        } });
-    }
-};
-
-fn format_ty(writer: anytype, ty: Ty, env: *const named.Env, ast: *const AST) !void {
-    switch (ty) {
-        .inference => |id| {
-            const inference = env.inferences.items[id];
-            switch (inference.tag) {
-                .variable => {
-                    const variable = env.variables.items[inference.index];
-                    try std.fmt.format(writer, "{s}", .{variable});
-                },
-                .typevar => {
-                    const variable = env.variables.items[inference.index];
-                    try std.fmt.format(writer, "@{s}", .{variable});
-                },
-                .unknown_expr => {
-                    try std.fmt.format(writer, "t{}", .{inference.index});
-                },
-                .expr => {
-                    try format_ast_node(writer, inference.index, ast);
-                },
-            }
-        },
-        .bound => |bound| {
-            if (std.mem.eql(u8, env.bound_names.items[bound.id], "(->)")) {
-                const lhs_is_func = switch (env.core_env.tys.items[bound.range.start]) {
-                    .bound => |bound2| std.mem.eql(u8, env.bound_names.items[bound2.id], "(->)"),
-                    else => false,
-                };
-
-                if (lhs_is_func) {
-                    _ = try writer.write("(");
-                    try format_ty(writer, env.core_env.tys.items[bound.range.start], env, ast);
-                    _ = try writer.write(")");
-                } else {
-                    try format_ty(writer, env.core_env.tys.items[bound.range.start], env, ast);
-                }
-
-                _ = try writer.write(" -> ");
-                try format_ty(writer, env.core_env.tys.items[bound.range.start + 1], env, ast);
-            } else {
-                try std.fmt.format(writer, "{s}", .{env.bound_names.items[bound.id]});
-                for (env.core_env.tys.items[bound.range.start..bound.range.end]) |child_ty| {
-                    _ = try writer.write(" ");
-
-                    if (child_ty.has_bound_args()) {
-                        _ = try writer.write("(");
-                        try format_ty(writer, child_ty, env, ast);
-                        _ = try writer.write(")");
-                    } else {
-                        try format_ty(writer, child_ty, env, ast);
-                    }
-                }
-            }
-        },
-    }
-}
-
-fn format_inferences(writer: anytype, inferences: *const solver.Map, env: *const named.Env, ast: *const AST) !void {
+fn format_inferences(writer: anytype, inferences: *const solver.Map, env: *const named.Env, ast: *const Ast.AST) !void {
     _ = try writer.write("inferences:\n");
     var it = inferences.iterator();
     while (it.next()) |entry| {
-        try format_ty(writer, .{ .inference = entry.key_ptr.* }, env, ast);
+        try Ast.format_ty(writer, .{ .inference = entry.key_ptr.* }, env, ast);
         _ = try writer.write(" :: ");
-        try format_ty(writer, entry.value_ptr.*, env, ast);
+        try Ast.format_ty(writer, entry.value_ptr.*, env, ast);
         _ = try writer.write("\n");
     }
 }
 
-fn format_error(writer: anytype, err: solver.Error, env: *const named.Env, ast: *const AST) !void {
+fn format_error(writer: anytype, err: solver.Error, env: *const named.Env, ast: *const Ast.AST) !void {
     switch (err) {
         .cyclic_type => |ty| {
             _ = try writer.write("cyclic type: ");
-            try format_ty(writer, ty, env, ast);
+            try Ast.format_ty(writer, ty, env, ast);
         },
         .unequal_bounds => |eq| {
             _ = try writer.write("Cannot equate ");
-            try format_ty(writer, eq.lhs, env, ast);
+            try Ast.format_ty(writer, eq.lhs, env, ast);
             _ = try writer.write(" to ");
-            try format_ty(writer, eq.rhs, env, ast);
+            try Ast.format_ty(writer, eq.rhs, env, ast);
         },
     }
 }
 
-fn format_result(writer: anytype, results: *const solver.Result, env: *const named.Env, ast: *const AST) !void {
+fn format_result(writer: anytype, results: *const solver.Result, env: *const named.Env, ast: *const Ast.AST) !void {
     _ = try writer.write("errors:\n");
     for (results.errors.items) |err| {
         try format_error(writer, err, env, ast);
@@ -365,12 +100,12 @@ const ScopeEnv = struct {
     const Self = @This();
 
     const HintMap = std.StringHashMapUnmanaged(Ty);
-    pub fn format_hintmap(self: *const Self, w: anytype, ast: *const AST, env: *const named.Env) void {
+    pub fn format_hintmap(self: *const Self, w: anytype, ast: *const Ast.AST, env: *const named.Env) void {
         std.fmt.format(w, "hints in current scope:\n", .{}) catch {};
         var iter = self.scopes.items[self.current_scope].hints.iterator();
         while (iter.next()) |i| {
             std.fmt.format(w, "{s} = ", .{i.key_ptr.*}) catch {};
-            format_ty(w, i.value_ptr.*, env, ast) catch {};
+            Ast.format_ty(w, i.value_ptr.*, env, ast) catch {};
             std.fmt.format(w, "\n", .{}) catch {};
         }
     }
@@ -496,7 +231,7 @@ fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *named.Env) !solver.Eq
     return .{ .lhs = a, .rhs = applied };
 }
 
-fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !Ty {
+fn walk_expr(index: u16, ast: *const Ast.AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !Ty {
     switch (ast.nodes.items(.tag)[index]) {
         .name_lookup => {
             const name_index = ast.nodes.items(.data)[index].as_ref();
@@ -535,7 +270,7 @@ fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuil
 
 // patterns are like expressions plus the bind. Except that they 'unwrap' the expression instead of wrapping it.
 // To produce equations, it returns the type that would be after the construction has occurred.
-fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !Ty {
+fn walk_pattern(index: u16, ast: *const Ast.AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !Ty {
     switch (ast.nodes.items(.tag)[index]) {
         // a 'lookup' in pattern context just means that we're defining a variable
         // well, not really. It might be also used for applying constructors that need to be a lookup...
@@ -587,7 +322,7 @@ fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeB
     }
 }
 
-fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !void {
+fn walk_decl(index: u16, ast: *Ast.AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !void {
     const datas = ast.nodes.items(.data);
     const decl = datas[index].as_decl(index, ast);
     // first, make a definition for the declaration
@@ -651,89 +386,12 @@ fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, e
     try equations.append(.{ .lhs = lhs, .rhs = rhs });
 }
 
-fn format_constraints(writer: anytype, constraints: []const solver.Equation, env: *const named.Env, ast: *const AST) !void {
+fn format_constraints(writer: anytype, constraints: []const solver.Equation, env: *const named.Env, ast: *const Ast.AST) !void {
     for (constraints) |c| {
-        try format_ty(writer, c.lhs, env, ast);
+        try Ast.format_ty(writer, c.lhs, env, ast);
         _ = try writer.write(" = ");
-        try format_ty(writer, c.rhs, env, ast);
+        try Ast.format_ty(writer, c.rhs, env, ast);
         _ = try writer.write("\n");
-    }
-}
-
-fn format_ast_node(writer: anytype, index: u16, ast: *const AST) !void {
-    switch (ast.nodes.items(.tag)[index]) {
-        .decl => {
-            const info = ast.nodes.items(.data)[index].as_decl(index, ast);
-            _ = try writer.write(info.name);
-            _ = try writer.write(" ");
-            {
-                var current_arg = info.args_begin;
-                while (current_arg != info.args_end) : (current_arg += 1) {
-                    if (ast.nodes.items(.tag)[current_arg] == .apply) {
-                        _ = try writer.write("(");
-                        try format_ast_node(writer, current_arg, ast);
-                        _ = try writer.write(")");
-                    } else {
-                        try format_ast_node(writer, current_arg, ast);
-                    }
-                    _ = try writer.write(" ");
-                }
-            }
-
-            _ = try writer.write(" = ");
-            try format_ast_node(writer, info.expr, ast);
-
-            if (info.clauses_begin != info.args_begin) {
-                _ = try writer.write("\n    where ");
-                try format_ast_node(writer, info.clauses_begin, ast);
-                var current_clause = info.clauses_begin + 1;
-                while (current_clause != info.args_begin) : (current_clause += 1) {
-                    _ = try writer.write("\n          ");
-                    try format_ast_node(writer, current_clause, ast);
-                }
-            }
-        },
-        .bind => {
-            const info = ast.nodes.items(.data)[index].as_bind(ast);
-            _ = try writer.write(info.name);
-            _ = try writer.write("@");
-            if (ast.nodes.items(.tag)[info.expr] == .apply) {
-                _ = try writer.write("(");
-                try format_ast_node(writer, info.expr, ast);
-                _ = try writer.write(")");
-            } else {
-                try format_ast_node(writer, info.expr, ast);
-            }
-        },
-        .apply => {
-            const info = ast.nodes.items(.data)[index].as_apply();
-            try format_ast_node(writer, info.func, ast);
-            _ = try writer.write(" ");
-            if (ast.nodes.items(.tag)[info.arg] == .apply) {
-                _ = try writer.write("(");
-                try format_ast_node(writer, info.arg, ast);
-                _ = try writer.write(")");
-            } else {
-                try format_ast_node(writer, info.arg, ast);
-            }
-        },
-        .name_lookup => {
-            const name_index = ast.nodes.items(.data)[index].as_ref();
-            const name = ast.as_name(name_index);
-            _ = try writer.write(name);
-        },
-        .ignored => {
-            _ = try writer.write("_");
-        },
-        .ifexpr => {
-            const info = ast.nodes.items(.data)[index].as_if(index, ast);
-            _ = try writer.write("if ");
-            try format_ast_node(writer, info.condition, ast);
-            _ = try writer.write(" then ");
-            try format_ast_node(writer, info.then_part, ast);
-            _ = try writer.write(" else ");
-            try format_ast_node(writer, info.else_part, ast);
-        },
     }
 }
 
@@ -759,13 +417,13 @@ const ASTBuilder = struct {
 
     pub const NameInfo = struct { lookup_node: u16, name_index: u16 };
 
-    ast: *AST,
+    ast: *Ast.AST,
     name_cache: std.StringHashMapUnmanaged(NameInfo),
-    // the AST and the Parser have distinct allocs since the parser cache will be
+    // the Ast.AST and the Parser have distinct allocs since the parser cache will be
     // cleaned right after we're done with parsing.
     alloc: std.mem.Allocator,
 
-    pub fn init(alloc: std.mem.Allocator, ast: *AST) Self {
+    pub fn init(alloc: std.mem.Allocator, ast: *Ast.AST) Self {
         return .{ .ast = ast, .name_cache = .{}, .alloc = alloc };
     }
 
@@ -831,13 +489,13 @@ fn build_unify_2(builder: *ASTBuilder) !u16 {
     const res = try builder.ast.pushIf(condition, then_part, else_part);
 
     // I need two fresh nodes here
-    const arg0 = AST.Node.apply(inference_lookup.lookup_node, a.lookup_node);
-    const arg1 = AST.Node.lookup(k.name_index);
+    const arg0 = Ast.AST.Node.apply(inference_lookup.lookup_node, a.lookup_node);
+    const arg1 = Ast.AST.Node.lookup(k.name_index);
 
     return try builder.ast.decl(unify.name_index, &.{ arg0, arg1 }, res, &.{});
 }
 
-fn build_unify_1(ast: *AST) !u16 {
+fn build_unify_1(ast: *Ast.AST) !u16 {
 
     // unify (Inference a) (Inference b) =
     //  if a == b then Right Empty else Right (Infer a (Inference b))
@@ -914,7 +572,7 @@ pub fn main() !void {
     var env = named.Env.init(arena.allocator());
     defer env.deinit();
 
-    var ast = AST.init(arena.allocator());
+    var ast = Ast.AST.init(arena.allocator());
     defer ast.deinit();
 
     var ty_builder = TypeBuilder.init(arena.allocator());
@@ -1085,7 +743,7 @@ pub fn main() !void {
     ast_arena.deinit();
 
     stdout.print("unify2: ", .{}) catch {};
-    format_ast_node(stdout, unify_2_index, &ast) catch {};
+    Ast.format_ast_node(stdout, unify_2_index, &ast) catch {};
     stdout.print("\n", .{}) catch {};
     try bw.flush();
 
@@ -1093,7 +751,7 @@ pub fn main() !void {
     try walk_decl(unify_2_index, &ast, &scope_env, &ty_builder, &env, &constraints);
 
     stdout.print("ast: ", .{}) catch {};
-    format_ast_node(stdout, unify_1_index, &ast) catch {};
+    Ast.format_ast_node(stdout, unify_1_index, &ast) catch {};
     stdout.print("\n", .{}) catch {};
     try bw.flush();
 
