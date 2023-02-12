@@ -2,10 +2,13 @@ const std = @import("std");
 
 const core = @import("core.zig");
 const solver = @import("solver.zig");
+const named = @import("named.zig");
+
+const log = std.log.scoped(.main);
 
 const Ty = core.Ty;
 
-fn drop_temps(inferences: *solver.Map, env: *const NamedEnv) !void {
+fn drop_temps(inferences: *solver.Map, env: *const named.Env) !void {
     var dropped = std.ArrayList(u16).init(inferences.allocator);
     defer {
         for (dropped.items) |dropped_k| {
@@ -24,136 +27,6 @@ fn drop_temps(inferences: *solver.Map, env: *const NamedEnv) !void {
 }
 
 // named env
-const NamedEnv = struct {
-    core_env: core.Env,
-    inferences: std.ArrayList(Inference),
-    variables: std.ArrayList(Variable),
-    bound_names: std.ArrayList([]const u8),
-    alloc: std.mem.Allocator,
-
-    const Inference = struct {
-        pub const Tag = enum(u2) { variable, typevar, unknown_expr, expr };
-
-        tag: Tag,
-        index: u16,
-    };
-
-    const Variable = []const u8;
-
-    pub fn init(alloc: std.mem.Allocator) NamedEnv {
-        return .{ .core_env = core.Env.init(), .inferences = std.ArrayList(Inference).init(alloc), .variables = std.ArrayList(Variable).init(alloc), .bound_names = std.ArrayList([]const u8).init(alloc), .alloc = alloc };
-    }
-
-    pub fn deinit(self: *NamedEnv) void {
-        self.core_env.deinit(self.alloc);
-        self.inferences.deinit();
-        self.variables.deinit();
-        self.bound_names.deinit();
-    }
-
-    pub fn add_bound_id(self: *NamedEnv, name: []const u8) !u14 {
-        const len = @truncate(u14, self.bound_names.items.len);
-        try self.bound_names.append(name);
-        return len;
-    }
-
-    pub fn inference(self: *NamedEnv, i: Inference) !u16 {
-        const len = @truncate(u16, self.inferences.items.len);
-        try self.inferences.append(i);
-        return len;
-    }
-
-    pub fn unknown(self: *NamedEnv, index: u14) !u16 {
-        return try self.inference(.{ .tag = .unknown_expr, .index = index });
-    }
-
-    pub fn create_var(self: *NamedEnv, comptime tag: Inference.Tag, name: Variable) !Inference {
-        const var_index = @truncate(u14, self.variables.items.len);
-        try self.variables.append(name);
-        return .{ .tag = tag, .index = var_index };
-    }
-
-    pub fn expr(self: *NamedEnv, expr_index: u16) !u16 {
-        return try self.inference(.{ .tag = .expr, .index = expr_index });
-    }
-
-    pub fn variable(self: *NamedEnv, comptime tag: Inference.Tag, desc: Variable) !u16 {
-        const i = try self.create_var(tag, desc);
-        return try self.inference(i);
-    }
-
-    // create inferences for each variable. Maybe have some hint of them being
-    // inferences for a (numbered) instance?
-    pub fn instantiate(self: *NamedEnv, ty: Ty) !Ty {
-        const Task = union(enum(u1)) { bind: struct { id: u16, count: u8 }, instantiate: Ty };
-
-        var arena = std.heap.ArenaAllocator.init(self.variables.allocator);
-        defer arena.deinit();
-
-        var tasks = std.ArrayList(Task).init(arena.allocator());
-        defer {
-            tasks.deinit();
-        }
-
-        var inference_map = std.AutoHashMap(u16, u16).init(arena.allocator());
-        defer inference_map.deinit();
-
-        var results = std.ArrayList(Ty).init(self.variables.allocator);
-        defer results.deinit();
-
-        try tasks.append(.{ .instantiate = ty });
-
-        while (tasks.popOrNull()) |task| {
-            switch (task) {
-                .instantiate => |to_instantiate| {
-                    switch (to_instantiate) {
-                        .inference => |id| {
-                            if (self.inferences.items[id].tag == .typevar) {
-                                const get_or_put = try inference_map.getOrPut(id);
-                                const inf = if (!get_or_put.found_existing) putnew: {
-                                    // copy the inference, but make it another ID.
-                                    const name = self.variables.items[self.inferences.items[id].index];
-                                    const new_inference = try self.variable(.typevar, name);
-                                    get_or_put.value_ptr.* = new_inference;
-                                    break :putnew new_inference;
-                                } else get_or_put.value_ptr.*;
-                                try results.append(.{ .inference = inf });
-                            } else {
-                                // leave it alone, since it's not a typevar.
-                                try results.append(to_instantiate);
-                            }
-                        },
-                        .bound => |bound| {
-                            // + 1 for the extra bind task that we push to the stack
-                            try tasks.ensureUnusedCapacity(bound.range.len() + 1);
-                            tasks.appendAssumeCapacity(.{ .bind = .{ .id = bound.id, .count = @truncate(u8, bound.range.len()) } });
-                            for (self.core_env.tys.items[bound.range.start..bound.range.end]) |child_ty| {
-                                tasks.appendAssumeCapacity(.{ .instantiate = child_ty });
-                            }
-                        },
-                    }
-                },
-                .bind => |info| {
-                    try self.core_env.tys.ensureUnusedCapacity(self.alloc, info.count);
-                    const start = @truncate(u16, self.core_env.tys.items.len);
-
-                    // since the results are produced into the stack in reverse order, popping them again
-                    // already restores the order.
-                    var i: u8 = 0;
-                    while (i != info.count) : (i += 1) {
-                        self.core_env.tys.appendAssumeCapacity(results.pop());
-                    }
-
-                    const end = @truncate(u16, self.core_env.tys.items.len);
-                    try results.append(.{ .bound = .{ .id = info.id, .range = .{ .start = start, .end = end } } });
-                },
-            }
-        }
-
-        //        std.debug.assert(results.items.len == 1, "must have consumed all the result stack but one");
-        return results.items[0];
-    }
-};
 
 // AST
 
@@ -363,7 +236,7 @@ const AST = struct {
     }
 };
 
-fn format_ty(writer: anytype, ty: Ty, env: *const NamedEnv, ast: *const AST) !void {
+fn format_ty(writer: anytype, ty: Ty, env: *const named.Env, ast: *const AST) !void {
     switch (ty) {
         .inference => |id| {
             const inference = env.inferences.items[id];
@@ -419,7 +292,7 @@ fn format_ty(writer: anytype, ty: Ty, env: *const NamedEnv, ast: *const AST) !vo
     }
 }
 
-fn format_inferences(writer: anytype, inferences: *const solver.Map, env: *const NamedEnv, ast: *const AST) !void {
+fn format_inferences(writer: anytype, inferences: *const solver.Map, env: *const named.Env, ast: *const AST) !void {
     _ = try writer.write("inferences:\n");
     var it = inferences.iterator();
     while (it.next()) |entry| {
@@ -430,7 +303,7 @@ fn format_inferences(writer: anytype, inferences: *const solver.Map, env: *const
     }
 }
 
-fn format_error(writer: anytype, err: solver.Error, env: *const NamedEnv, ast: *const AST) !void {
+fn format_error(writer: anytype, err: solver.Error, env: *const named.Env, ast: *const AST) !void {
     switch (err) {
         .cyclic_type => |ty| {
             _ = try writer.write("cyclic type: ");
@@ -445,7 +318,7 @@ fn format_error(writer: anytype, err: solver.Error, env: *const NamedEnv, ast: *
     }
 }
 
-fn format_result(writer: anytype, results: *const solver.Result, env: *const NamedEnv, ast: *const AST) !void {
+fn format_result(writer: anytype, results: *const solver.Result, env: *const named.Env, ast: *const AST) !void {
     _ = try writer.write("errors:\n");
     for (results.errors.items) |err| {
         try format_error(writer, err, env, ast);
@@ -471,7 +344,7 @@ const TypeBuilder = struct {
         self.type_variables.deinit(self.alloc);
     }
 
-    pub fn bound_id(self: *Self, name: []const u8, env: *NamedEnv) !u16 {
+    pub fn bound_id(self: *Self, name: []const u8, env: *named.Env) !u16 {
         const get_or_put = try self.bounds.getOrPut(self.alloc, name);
         if (!get_or_put.found_existing) {
             get_or_put.value_ptr.* = try env.add_bound_id(name);
@@ -479,7 +352,7 @@ const TypeBuilder = struct {
         return get_or_put.value_ptr.*;
     }
 
-    pub fn type_var(self: *Self, name: []const u8, env: *NamedEnv) !u16 {
+    pub fn type_var(self: *Self, name: []const u8, env: *named.Env) !u16 {
         const get_or_put = try self.type_variables.getOrPut(self.alloc, name);
         if (!get_or_put.found_existing) {
             get_or_put.value_ptr.* = try env.variable(.typevar, name);
@@ -492,7 +365,7 @@ const ScopeEnv = struct {
     const Self = @This();
 
     const HintMap = std.StringHashMapUnmanaged(Ty);
-    pub fn format_hintmap(self: *const Self, w: anytype, ast: *const AST, env: *const NamedEnv) void {
+    pub fn format_hintmap(self: *const Self, w: anytype, ast: *const AST, env: *const named.Env) void {
         std.fmt.format(w, "hints in current scope:\n", .{}) catch {};
         var iter = self.scopes.items[self.current_scope].hints.iterator();
         while (iter.next()) |i| {
@@ -512,7 +385,7 @@ const ScopeEnv = struct {
             self.hints.deinit(alloc);
         }
 
-        pub fn define(self: *Scope, name: []const u8, env: *NamedEnv, alloc: std.mem.Allocator) !u16 {
+        pub fn define(self: *Scope, name: []const u8, env: *named.Env, alloc: std.mem.Allocator) !u16 {
             const get_or_put = try self.variables.getOrPut(alloc, name);
 
             // if we had another definition, reuse that index instead of wasting space.
@@ -560,7 +433,7 @@ const ScopeEnv = struct {
     }
 
     // NOTE: this is currently replacing stuff resulting from expressions
-    pub fn unknown(self: *Self, env: *NamedEnv) !u16 {
+    pub fn unknown(self: *Self, env: *named.Env) !u16 {
         const inference_index = try env.unknown(self.unknown_count);
         self.unknown_count += 1;
         return inference_index;
@@ -576,7 +449,7 @@ const ScopeEnv = struct {
         try self.scopes.items[self.current_scope].hints.put(self.arena.allocator(), name, ty);
     }
 
-    pub fn get(self: *Self, name: []const u8, env: *NamedEnv) !Ty {
+    pub fn get(self: *Self, name: []const u8, env: *named.Env) !Ty {
         const found_inference = getvar: {
             var current_scope: *Scope = &self.scopes.items[self.current_scope];
             break :getvar while (true) {
@@ -592,9 +465,7 @@ const ScopeEnv = struct {
                 var current_scope = self.current_scope;
                 break :gethint while (true) {
                     if (self.scopes.items[current_scope].hints.get(name)) |h|
-                        break h: {
-                            break :h h;
-                        };
+                        break h;
                     if (self.scopes.items[current_scope].parent) |p| {
                         current_scope = p;
                     } else break null;
@@ -607,12 +478,12 @@ const ScopeEnv = struct {
         return final_inference;
     }
 
-    pub fn define(self: *Self, name: []const u8, env: *NamedEnv) !u16 {
+    pub fn define(self: *Self, name: []const u8, env: *named.Env) !u16 {
         return try self.scopes.items[self.current_scope].define(name, env, self.arena.allocator());
     }
 };
 
-fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *NamedEnv) !solver.Equation {
+fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *named.Env) !solver.Equation {
     try env.core_env.tys.ensureUnusedCapacity(env.alloc, 2);
     const bound_id = try types.bound_id("(->)", env);
     const start = @truncate(u16, env.core_env.tys.items.len);
@@ -625,7 +496,7 @@ fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *NamedEnv) !solver.Equ
     return .{ .lhs = a, .rhs = applied };
 }
 
-fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(solver.Equation)) !Ty {
+fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !Ty {
     switch (ast.nodes.items(.tag)[index]) {
         .name_lookup => {
             const name_index = ast.nodes.items(.data)[index].as_ref();
@@ -664,7 +535,7 @@ fn walk_expr(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuil
 
 // patterns are like expressions plus the bind. Except that they 'unwrap' the expression instead of wrapping it.
 // To produce equations, it returns the type that would be after the construction has occurred.
-fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(solver.Equation)) !Ty {
+fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !Ty {
     switch (ast.nodes.items(.tag)[index]) {
         // a 'lookup' in pattern context just means that we're defining a variable
         // well, not really. It might be also used for applying constructors that need to be a lookup...
@@ -716,7 +587,7 @@ fn walk_pattern(index: u16, ast: *const AST, scope_env: *ScopeEnv, types: *TypeB
     }
 }
 
-fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *NamedEnv, equations: *std.ArrayList(solver.Equation)) !void {
+fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, env: *named.Env, equations: *std.ArrayList(solver.Equation)) !void {
     const datas = ast.nodes.items(.data);
     const decl = datas[index].as_decl(index, ast);
     // first, make a definition for the declaration
@@ -780,7 +651,7 @@ fn walk_decl(index: u16, ast: *AST, scope_env: *ScopeEnv, types: *TypeBuilder, e
     try equations.append(.{ .lhs = lhs, .rhs = rhs });
 }
 
-fn format_constraints(writer: anytype, constraints: []const solver.Equation, env: *const NamedEnv, ast: *const AST) !void {
+fn format_constraints(writer: anytype, constraints: []const solver.Equation, env: *const named.Env, ast: *const AST) !void {
     for (constraints) |c| {
         try format_ty(writer, c.lhs, env, ast);
         _ = try writer.write(" = ");
@@ -1040,7 +911,7 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer _ = arena.deinit();
 
-    var env = NamedEnv.init(arena.allocator());
+    var env = named.Env.init(arena.allocator());
     defer env.deinit();
 
     var ast = AST.init(arena.allocator());

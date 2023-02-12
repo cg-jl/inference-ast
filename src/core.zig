@@ -33,11 +33,7 @@ pub const Env = struct {
     // when looping through a bound type.
     // This environment only does growing allocations, and only frees everything
     // when finished.
-    tys: std.ArrayListUnmanaged(Ty),
-
-    pub fn init() Env {
-        return .{ .tys = .{} };
-    }
+    tys: std.ArrayListUnmanaged(Ty) = .{},
 
     pub fn deinit(self: *Env, alloc: std.mem.Allocator) void {
         self.tys.deinit(alloc);
@@ -50,14 +46,14 @@ pub const Env = struct {
     }
 
     pub fn view(self: *const Env, range: Range) []const Ty {
-        return self.tys.items[range.start..range.end];
+        return if (range.is_empty()) &[_]Ty{} else self.tys.items[range.start..range.end];
     }
 };
 
 pub fn format_ty(writer: anytype, ty: Ty, env: *const Env) !void {
     switch (ty) {
         .inference => |id| {
-            try std.fmt.format(writer, "'{}", id);
+            try std.fmt.format(writer, "'{}", .{id});
         },
 
         .bound => |bound| {
