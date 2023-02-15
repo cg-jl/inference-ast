@@ -8,6 +8,8 @@ const log = std.log.scoped(.named);
 
 const Ty = core.Ty;
 
+// TODO: named Env has tight coupling with AST. Should be more decoupled, or joined
+// with AST.
 pub const Env = struct {
     core_env: core.Env = .{},
     inferences: std.ArrayListUnmanaged(Inference) = .{},
