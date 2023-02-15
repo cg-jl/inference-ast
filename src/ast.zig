@@ -114,6 +114,25 @@ const IfData = struct {
     else_distance: u8,
 };
 
+pub const Node = struct {
+    tag: NodeKind,
+    data: NodeData,
+
+    pub inline fn apply(func: u16, arg: u16) Node {
+        return .{
+            .tag = .apply,
+            .data = .{ .lhs = func, .rhs = arg },
+        };
+    }
+
+    pub inline fn lookup(name_index: u16) Node {
+        return .{
+            .tag = .name_lookup,
+            .data = .{ .lhs = name_index, .rhs = 0 },
+        };
+    }
+};
+
 pub const AST = struct {
     // NOTE: decl_infos, names and ifs could be all merged together.
     decl_infos: std.ArrayList(DeclInfo),
@@ -123,25 +142,6 @@ pub const AST = struct {
 
     ifs: std.ArrayList(IfData),
     alloc: std.mem.Allocator,
-
-    pub const Node = struct {
-        tag: NodeKind,
-        data: NodeData,
-
-        pub inline fn apply(func: u16, arg: u16) Node {
-            return .{
-                .tag = .apply,
-                .data = .{ .lhs = func, .rhs = arg },
-            };
-        }
-
-        pub inline fn lookup(name_index: u16) Node {
-            return .{
-                .tag = .name_lookup,
-                .data = .{ .lhs = name_index, .rhs = 0 },
-            };
-        }
-    };
 
     pub fn init(alloc: std.mem.Allocator) AST {
         return .{

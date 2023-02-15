@@ -85,8 +85,8 @@ fn build_unify_2(builder: *Ast.Builder) !u16 {
     const res = try builder.ast.pushIf(condition, then_part, else_part);
 
     // I need two fresh nodes here
-    const arg0 = Ast.AST.Node.apply(inference_lookup.lookup_node, a.lookup_node);
-    const arg1 = Ast.AST.Node.lookup(k.name_index);
+    const arg0 = Ast.Node.apply(inference_lookup.lookup_node, a.lookup_node);
+    const arg1 = Ast.Node.lookup(k.name_index);
 
     return try builder.ast.decl(unify.name_index, &.{ arg0, arg1 }, res, &.{});
 }
