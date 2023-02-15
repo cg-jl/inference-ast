@@ -30,14 +30,6 @@ fn drop_temps(inferences: *solver.Map, env: *const named.Env) !void {
     }
 }
 
-fn format_constraints(writer: anytype, constraints: []const solver.Equation, env: *const named.Env, ast: *const Ast.AST) !void {
-    for (constraints) |c| {
-        try Ast.format_ty(writer, c.lhs, env, ast);
-        _ = try writer.write(" = ");
-        try Ast.format_ty(writer, c.rhs, env, ast);
-        _ = try writer.write("\n");
-    }
-}
 
 const Input = struct {
     all: []const u8,
@@ -356,7 +348,7 @@ pub fn main() !void {
     try drop_temps(&result.inferences, &env);
     defer result.deinit();
 
-    try format.result(stdout, &result, &env, &ast);
+    try format.format_result(stdout, &result, &env, &ast);
     try stdout.print("\n", .{});
 
     try bw.flush(); // don't forget to flush!
