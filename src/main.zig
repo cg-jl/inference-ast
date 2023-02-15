@@ -56,55 +56,7 @@ const Input = struct {
     }
 };
 
-const ASTBuilder = struct {
-    const Self = @This();
-
-    pub const NameInfo = struct { lookup_node: u16, name_index: u16 };
-
-    ast: *Ast.AST,
-    name_cache: std.StringHashMapUnmanaged(NameInfo),
-    // the Ast.AST and the Parser have distinct allocs since the parser cache will be
-    // cleaned right after we're done with parsing.
-    alloc: std.mem.Allocator,
-
-    pub fn init(alloc: std.mem.Allocator, ast: *Ast.AST) Self {
-        return .{ .ast = ast, .name_cache = .{}, .alloc = alloc };
-    }
-
-    pub fn cachedNameAssumeCapacity(self: *Self, name: []const u8) NameInfo {
-        const get_or_put = self.lookup_node_cache.getOrPutAssumeCapacity(name);
-        if (!get_or_put.found_existing) {
-            const index = @truncate(u16, self.ast.names.len);
-            self.ast.names.appendAssumeCapacity(name);
-            const node = self.ast.nameAssumeCapacity(index);
-            const info = NameInfo{ .lookup_node = node, .name_index = index };
-            get_or_put.value_ptr.* = info;
-            return info;
-        } else {
-            return get_or_put.value_ptr.*;
-        }
-    }
-
-    pub fn cachedName(self: *Self, name: []const u8) !NameInfo {
-        const get_or_put = try self.name_cache.getOrPut(self.alloc, name);
-        if (!get_or_put.found_existing) {
-            const index = @truncate(u16, self.ast.names.items.len);
-            try self.ast.names.append(name);
-            const node = try self.ast.name(index);
-            const info = NameInfo{ .lookup_node = node, .name_index = index };
-            get_or_put.value_ptr.* = info;
-            return info;
-        } else {
-            return get_or_put.value_ptr.*;
-        }
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.name_cache.deinit(self.alloc);
-    }
-};
-
-fn build_unify_2(builder: *ASTBuilder) !u16 {
+fn build_unify_2(builder: *Ast.Builder) !u16 {
     // unify (Inference a) k = if occurs a k then Left (CyclicType k) else Right
     // (Infer a k)
 
@@ -380,7 +332,7 @@ pub fn main() !void {
     const unify_1_index = try build_unify_1(&ast);
 
     var ast_arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    var ast_builder = ASTBuilder.init(ast_arena.allocator(), &ast);
+    var ast_builder = Ast.Builder.init(ast_arena.allocator(), &ast);
 
     const unify_2_index = try build_unify_2(&ast_builder);
     ast_builder.deinit();

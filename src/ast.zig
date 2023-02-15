@@ -2,6 +2,53 @@ const std = @import("std");
 const named = @import("named.zig");
 const core = @import("core.zig");
 
+pub const Builder = struct {
+    const Self = @This();
+
+    pub const NameInfo = struct { lookup_node: u16, name_index: u16 };
+
+    ast: *AST,
+    name_cache: std.StringHashMapUnmanaged(NameInfo),
+    // the Ast.AST and the Parser have distinct allocs since the parser cache will be
+    // cleaned right after we're done with parsing.
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator, ast: *AST) Self {
+        return .{ .ast = ast, .name_cache = .{}, .alloc = alloc };
+    }
+
+    pub fn cachedNameAssumeCapacity(self: *Self, name: []const u8) NameInfo {
+        const get_or_put = self.lookup_node_cache.getOrPutAssumeCapacity(name);
+        if (!get_or_put.found_existing) {
+            const index = @truncate(u16, self.ast.names.len);
+            self.ast.names.appendAssumeCapacity(name);
+            const node = self.ast.nameAssumeCapacity(index);
+            const info = NameInfo{ .lookup_node = node, .name_index = index };
+            get_or_put.value_ptr.* = info;
+            return info;
+        } else {
+            return get_or_put.value_ptr.*;
+        }
+    }
+
+    pub fn cachedName(self: *Self, name: []const u8) !NameInfo {
+        const get_or_put = try self.name_cache.getOrPut(self.alloc, name);
+        if (!get_or_put.found_existing) {
+            const index = @truncate(u16, self.ast.names.items.len);
+            try self.ast.names.append(name);
+            const node = try self.ast.name(index);
+            const info = NameInfo{ .lookup_node = node, .name_index = index };
+            get_or_put.value_ptr.* = info;
+            return info;
+        } else {
+            return get_or_put.value_ptr.*;
+        }
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.name_cache.deinit(self.alloc);
+    }
+};
 const NodeKind = enum(u4) {
     // lhs: declaration info index
     decl,
