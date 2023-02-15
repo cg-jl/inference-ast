@@ -30,7 +30,6 @@ fn drop_temps(inferences: *solver.Map, env: *const named.Env) !void {
     }
 }
 
-
 const Input = struct {
     all: []const u8,
     start: u32,
@@ -83,71 +82,50 @@ fn build_unify_2(builder: *Ast.Builder) !u16 {
     return try builder.ast.decl(unify.name_index, &.{ arg0, arg1 }, res, &.{});
 }
 
-fn build_unify_1(ast: *Ast.AST) !u16 {
+fn build_unify_1(builder: *Ast.Builder) !u16 {
 
     // unify (Inference a) (Inference b) =
     //  if a == b then Right Empty else Right (Infer a (Inference b))
 
-    try ast.nodes.ensureUnusedCapacity(ast.alloc, 19);
-    try ast.ifs.ensureUnusedCapacity(1);
-    try ast.decl_infos.ensureUnusedCapacity(1);
-
-    try ast.names.ensureUnusedCapacity(8);
-    const right_name_index = @truncate(u16, ast.names.items.len);
-
-    const right_lookup = ast.pushNodeAssumeCapacity(.{
-        .tag = .name_lookup,
-        .data = .{ .lhs = right_name_index, .rhs = 0 },
-    });
-
-    const empty_name_index = @truncate(u16, ast.names.items.len + 1);
-    const b_name_index = @truncate(u16, ast.names.items.len + 2);
-    const inference_name_index = @truncate(u16, ast.names.items.len + 3);
-    const infer_name_index = @truncate(u16, ast.names.items.len + 4);
-    const a_name_index = @truncate(u16, ast.names.items.len + 5);
-
-    const a_lookup = ast.nameAssumeCapacity(a_name_index);
-
-    const b_lookup = ast.nameAssumeCapacity(b_name_index);
-
-    const inference_lookup = ast.nameAssumeCapacity(inference_name_index);
-
-    const eq_name_index = @truncate(u16, ast.names.items.len + 6);
-    const unify_name_index = @truncate(u16, ast.names.items.len + 7);
-
-    ast.names.appendSliceAssumeCapacity(&[_][]const u8{ "Right", "Empty", "b", "Inference", "Infer", "a", "(==)", "unify" });
+    const right = try builder.cachedName("Right");
+    const infer = try builder.cachedName("Infer");
+    const inference = try builder.cachedName("Inference");
+    const a = try builder.cachedName("a");
+    const b = try builder.cachedName("b");
+    const eq = try builder.cachedName("(==)");
+    const unify = try builder.cachedName("unify");
+    const empty = try builder.cachedName("Empty");
 
     // Right Empty
-    const then_part = ast.applyAssumeCapacity(
-        right_lookup,
-        ast.nameAssumeCapacity(empty_name_index),
-    );
+    const then_part = try builder.ast.apply(right.lookup_node, empty.lookup_node);
 
     // (Inference b)
-    const inference_b = ast.applyAssumeCapacity(inference_lookup, b_lookup);
+    const inference_b = try builder.ast.apply(inference.lookup_node, b.lookup_node);
 
     // Right (Infer a (Inference b))
-    const else_part = ast.applyAssumeCapacity(
-        right_lookup,
-        ast.applyAssumeCapacity(ast.applyAssumeCapacity(
-            ast.nameAssumeCapacity(infer_name_index),
-            a_lookup,
-        ), inference_b),
-    );
+    const else_part = try builder.ast.apply(right.lookup_node, try builder.ast.apply(
+        try builder.ast.apply(infer.lookup_node, a.lookup_node),
+        inference_b,
+    ));
 
     // ((==) a) b
-    const condition = ast.applyAssumeCapacity(ast.applyAssumeCapacity(
-        ast.nameAssumeCapacity(eq_name_index),
-        a_lookup,
-    ), b_lookup);
+    const condition = try builder.ast.apply(
+        try builder.ast.apply(eq.lookup_node, a.lookup_node),
+        b.lookup_node,
+    );
 
     // if a == b then Right Empty else Right (Infer a (Inference b))
-    const unify_res = ast.pushIfAssumeCapacity(condition, then_part, else_part);
+    const unify_res = try builder.ast.pushIf(condition, then_part, else_part);
 
-    return ast.declAssumeCapacity(unify_name_index, &.{
-        .{ .tag = .apply, .data = .{ .lhs = inference_lookup, .rhs = a_lookup } },
-        .{ .tag = .apply, .data = .{ .lhs = inference_lookup, .rhs = b_lookup } },
-    }, unify_res, &.{});
+    return try builder.ast.decl(
+        unify.name_index,
+        &.{
+            Ast.Node.apply(inference.lookup_node, a.lookup_node),
+            Ast.Node.apply(inference.lookup_node, b.lookup_node),
+        },
+        unify_res,
+        &.{},
+    );
 }
 
 pub fn main() !void {
@@ -321,10 +299,16 @@ pub fn main() !void {
     // constraints also go into GPA since its allocations are sporadic.
     var constraints = std.ArrayList(solver.Equation).init(gpa.allocator());
 
-    const unify_1_index = try build_unify_1(&ast);
-
     var ast_arena = std.heap.ArenaAllocator.init(gpa.allocator());
     var ast_builder = Ast.Builder.init(ast_arena.allocator(), &ast);
+
+    const unify_1_index = try build_unify_1(&ast_builder);
+
+    stdout.print("unify: ", .{}) catch {};
+    Ast.format_ast_node(stdout, unify_1_index, &ast) catch {};
+    stdout.print("\n", .{}) catch {};
+    try bw.flush();
+
 
     const unify_2_index = try build_unify_2(&ast_builder);
     ast_builder.deinit();
