@@ -55,10 +55,7 @@ pub const Env = struct {
     }
 
     pub fn unknown(self: *Env, index: u16) !u16 {
-        return try @call(.always_inline, Env.inference, .{ self, .{
-            .tag = .unknown_expr,
-            .index = index,
-        } });
+        return try self.inference(.{ .tag = .unknown_expr, .index = index });
     }
 
     pub fn create_var(self: *Env, comptime tag: Inference.Tag, name: Variable) !Inference {
@@ -68,15 +65,12 @@ pub const Env = struct {
     }
 
     pub fn expr(self: *Env, expr_index: u16) !u16 {
-        return try @call(.always_inline, Env.inference, .{ self, .{
-            .tag = .expr,
-            .index = expr_index,
-        } });
+        return try self.inference(.{ .tag = .expr, .index = expr_index });
     }
 
     pub fn variable(self: *Env, comptime tag: Inference.Tag, desc: Variable) !u16 {
-        const i = try @call(.always_inline, Env.create_var, .{ self, tag, desc });
-        return try @call(.always_inline, Env.inference, .{ self, i });
+        const i = try self.create_var(tag, desc);
+        return try self.inference(i);
     }
 
     // create inferences for each variable. Maybe have some hint of them being
