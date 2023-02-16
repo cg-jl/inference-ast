@@ -322,11 +322,6 @@ pub fn main() !void {
     //try walk_decl(unify_1_index, &ast, &scope_env, &ty_builder, &env, &constraints);
     try lower.walk_decl(unify_2_index, &ast, &scope_env, &ty_builder, &env, &constraints);
 
-    stdout.print("ast: ", .{}) catch {};
-    Ast.format_ast_node(stdout, unify_1_index, &ast) catch {};
-    stdout.print("\n", .{}) catch {};
-    try bw.flush();
-
     var result = try solver.solve(constraints, &env.core_env);
 
     try drop_temps(&result.inferences, &env);
