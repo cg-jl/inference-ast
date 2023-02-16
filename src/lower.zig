@@ -71,15 +71,13 @@ pub fn walk_decl(index: u16, ast: *Ast.AST, scope_env: *scope.Env, types: *TypeB
         });
         var current_arg = decl.args_begin;
         try equations.ensureUnusedCapacity(decl.args_end - decl.args_begin);
+        try ast.nodes.ensureUnusedCapacity(ast.alloc, decl.args_end - decl.args_begin);
         while (current_arg != decl.args_end) : (current_arg += 1) {
             const arg_ty = try walk_pattern(current_arg, ast, scope_env, types, env, equations);
 
             const applied_folded_expr = mkApplyExpr: {
                 const res = @truncate(u16, ast.nodes.len);
-                try ast.nodes.append(ast.alloc, .{
-                    .tag = .apply,
-                    .data = .{ .lhs = folded_expr, .rhs = current_arg },
-                });
+                ast.nodes.appendAssumeCapacity(Ast.Node.apply(folded_expr, current_arg));
                 break :mkApplyExpr res;
             };
 
@@ -131,20 +129,17 @@ fn walk_pattern(index: u16, ast: *const Ast.AST, scope_env: *scope.Env, types: *
         // an application is resolved the same way as an expression but through the context of patterns
         .apply => {
             const info = ast.nodes.items(.data)[index].as_apply();
-            // if the function is a lookup, use 'get', not 'define', which would be used in `walk_pattern`.
             const func = if (ast.nodes.items(.tag)[info.func] == .name_lookup)
-                try scope_env.get(ast.as_name(ast.nodes.items(.data)[info.func].as_ref()), env)
+                Ty{ .inference = try scope_env.define(ast.as_name(ast.nodes.items(.data)[info.func].as_ref()), env) }
             else
                 try walk_pattern(info.func, ast, scope_env, types, env, equations);
             const arg = try walk_pattern(info.arg, ast, scope_env, types, env, equations);
-
-            try equations.ensureUnusedCapacity(1);
 
             // define a new type to be the result of this application
             // (currently an 'unknown' but I'll develop something for it)
             const res = .{ .inference = try env.expr(index) };
             const eq = try apply(func, arg, res, types, env);
-            equations.appendAssumeCapacity(eq);
+            try equations.append(eq);
 
             // the resulting type of the pattern is the full application of the constructor
             return res;
