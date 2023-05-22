@@ -42,7 +42,7 @@ pub fn solve(constraints: std.ArrayList(Equation), env: *core.Env) !Result {
                         // NOTE: currently this assumes that bounds have the same applied arguments. For
                         // arbitrary arguments some modifications are needed.
                         try equations.ensureUnusedCapacity(lhs_bound.range.len());
-                        for (env.view(lhs_bound.range)) |lty, i| {
+                        for (env.view(lhs_bound.range), 0..) |lty, i| {
                             const rty = env.tys.items[rhs_bound.range.start + i];
                             equations.appendAssumeCapacity(.{
                                 .lhs = lty,

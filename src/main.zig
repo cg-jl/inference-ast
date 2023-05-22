@@ -309,7 +309,6 @@ pub fn main() !void {
     stdout.print("\n", .{}) catch {};
     try bw.flush();
 
-
     const unify_2_index = try build_unify_2(&ast_builder);
     ast_builder.deinit();
     ast_arena.deinit();
