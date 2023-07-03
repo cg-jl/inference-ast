@@ -8,12 +8,12 @@ pub const Env = struct {
     const Self = @This();
 
     const HintMap = std.StringHashMapUnmanaged(Ty);
-    pub fn format_hintmap(self: *const Self, w: anytype, ast: *const Ast.AST, env: *const named.Env) void {
+    pub fn formatHintmap(self: *const Self, w: anytype, ast: *const Ast.AST, env: *const named.Env) void {
         std.fmt.format(w, "hints in current scope:\n", .{}) catch {};
         var iter = self.scopes.items[self.current_scope].hints.iterator();
         while (iter.next()) |i| {
             std.fmt.format(w, "{s} = ", .{i.key_ptr.*}) catch {};
-            Ast.format_ty(w, i.value_ptr.*, env, ast) catch {};
+            Ast.formatTy(w, i.value_ptr.*, env, ast) catch {};
             std.fmt.format(w, "\n", .{}) catch {};
         }
     }
@@ -35,7 +35,7 @@ pub const Env = struct {
             // this way we can also point all definitions of the inference to the new set,
             // so that things declared initially as 'unknown' get redirected to the new sample.
             if (!get_or_put.found_existing) {
-                const inf = try env.create_var(.variable, name);
+                const inf = try env.createVar(.variable, name);
                 const new_inference = try env.inference(inf);
                 get_or_put.value_ptr.* = new_inference;
             }
@@ -69,7 +69,7 @@ pub const Env = struct {
         self.arena.deinit();
     }
 
-    pub fn create_scope(self: *Self, parent: ?ScopeIndex) !ScopeIndex {
+    pub fn createScope(self: *Self, parent: ?ScopeIndex) !ScopeIndex {
         const len = @truncate(ScopeIndex, self.scopes.items.len);
         try self.scopes.append(self.arena.allocator(), .{ .parent = parent, .variables = .{}, .hints = .{} });
         return len;
@@ -82,13 +82,13 @@ pub const Env = struct {
         return inference_index;
     }
 
-    pub fn switch_to_scope(self: *Self, scope: ScopeIndex) ScopeIndex {
+    pub fn switchToScope(self: *Self, scope: ScopeIndex) ScopeIndex {
         const old_scope = self.current_scope;
         self.current_scope = scope;
         return old_scope;
     }
 
-    pub fn add_hint(self: *Self, name: []const u8, ty: Ty) !void {
+    pub fn addHint(self: *Self, name: []const u8, ty: Ty) !void {
         try self.scopes.items[self.current_scope].hints.put(self.arena.allocator(), name, ty);
     }
 

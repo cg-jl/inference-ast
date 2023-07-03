@@ -12,7 +12,7 @@ const log = std.log.scoped(.main);
 
 const Ty = core.Ty;
 
-fn drop_temps(inferences: *solver.Map, env: *const named.Env) !void {
+fn dropTemps(inferences: *solver.Map, env: *const named.Env) !void {
     var dropped = std.ArrayList(u16).init(inferences.allocator);
     defer {
         for (dropped.items) |dropped_k| {
@@ -47,7 +47,7 @@ const Input = struct {
     }
 };
 
-fn build_unify_2(builder: *Ast.Builder) !u16 {
+fn buildUnify2(builder: *Ast.Builder) !u16 {
     // unify (Inference a) k = if occurs a k then Left (CyclicType k) else Right
     // (Infer a k)
 
@@ -82,7 +82,7 @@ fn build_unify_2(builder: *Ast.Builder) !u16 {
     return try builder.ast.decl(unify.name_index, &.{ arg0, arg1 }, res, &.{});
 }
 
-fn build_unify_1(builder: *Ast.Builder) !u16 {
+fn buildUnify1(builder: *Ast.Builder) !u16 {
 
     // unify (Inference a) (Inference b) =
     //  if a == b then Right Empty else Right (Infer a (Inference b))
@@ -149,152 +149,121 @@ pub fn main() !void {
     defer scope_env.deinit();
 
     // root
-    _ = try scope_env.create_scope(null);
+    _ = try scope_env.createScope(null);
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    // add hint: (==) :: a -> a -> Bool
     {
         const a_typevar = Ty{ .inference = try env.variable(.typevar, "a") };
         const e_typevar = Ty{ .inference = try env.variable(.typevar, "e") };
-        const bool_ty = Ty{ .bound = .{ .id = try ty_builder.bound_id("Bool", &env), .range = core.Range.empty() } };
-        const func_bound_id = try ty_builder.bound_id("(->)", &env);
+        const bool_ty = Ty{ .bound = .{ .id = try ty_builder.boundId("Bool", &env), .range = core.Range.empty() } };
+        const func_bound_id = try ty_builder.boundId("(->)", &env);
 
-        const unify_event_a = build_unify_ev: {
-            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-            break :build_unify_ev Ty{ .bound = .{
-                .id = try ty_builder.bound_id("UnifyEvent", &env),
+        const unify_event_a = buildUnifyEv: {
+            const start = try env.core_env.insertTy(env.alloc, a_typevar);
+            break :buildUnifyEv Ty{ .bound = .{
+                .id = try ty_builder.boundId("UnifyEvent", &env),
                 .range = .{ .start = start, .end = start + 1 },
             } };
         };
 
-        const unify_error_a = build_unify_err: {
-            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-            break :build_unify_err Ty{ .bound = .{ .id = try ty_builder.bound_id("UnifyError", &env), .range = .{ .start = start, .end = start + 1 } } };
+        const unify_error_a = buildUnifyErr: {
+            const start = try env.core_env.insertTy(env.alloc, a_typevar);
+            break :buildUnifyErr Ty{ .bound = .{ .id = try ty_builder.boundId("UnifyError", &env), .range = .{ .start = start, .end = start + 1 } } };
         };
 
-        const either_e_a = build_either: {
-            const bound_id = try ty_builder.bound_id("Either", &env);
-            const start = try env.core_env.insert_ty(env.alloc, e_typevar);
-            _ = try env.core_env.insert_ty(env.alloc, a_typevar);
-            break :build_either Ty{ .bound = .{
+        const either_e_a = buildEither: {
+            const bound_id = try ty_builder.boundId("Either", &env);
+            const start = try env.core_env.insertTy(env.alloc, e_typevar);
+            _ = try env.core_env.insertTy(env.alloc, a_typevar);
+            break :buildEither Ty{ .bound = .{
                 .id = bound_id,
                 .range = .{ .start = start, .end = start + 2 },
             } };
         };
 
-        //        try scope_env.add_hint("Empty", unify_event_a);
-
-        try scope_env.add_hint("Right", mkRight: {
-            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-            _ = try env.core_env.insert_ty(env.alloc, either_e_a);
+        try scope_env.addHint("Right", mkRight: {
+            const start = try env.core_env.insertTy(env.alloc, a_typevar);
+            _ = try env.core_env.insertTy(env.alloc, either_e_a);
             break :mkRight .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
             } };
         });
 
-        try scope_env.add_hint("Left", mkLeft: {
-            const start = try env.core_env.insert_ty(env.alloc, e_typevar);
-            _ = try env.core_env.insert_ty(env.alloc, either_e_a);
+        try scope_env.addHint("Left", mkLeft: {
+            const start = try env.core_env.insertTy(env.alloc, e_typevar);
+            _ = try env.core_env.insertTy(env.alloc, either_e_a);
             break :mkLeft .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
             } };
         });
 
-        //const list_bound_id = try ty_builder.bound_id("[]", &env);
-
         {
             const a2bool = a2bool: {
-                const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-                _ = try env.core_env.insert_ty(env.alloc, bool_ty);
+                const start = try env.core_env.insertTy(env.alloc, a_typevar);
+                _ = try env.core_env.insertTy(env.alloc, bool_ty);
                 break :a2bool Ty{ .bound = .{ .id = func_bound_id, .range = .{ .start = start, .end = start + 2 } } };
             };
 
             const eq = eq: {
-                const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-                _ = try env.core_env.insert_ty(env.alloc, a2bool);
+                const start = try env.core_env.insertTy(env.alloc, a_typevar);
+                _ = try env.core_env.insertTy(env.alloc, a2bool);
                 break :eq Ty{ .bound = .{ .id = func_bound_id, .range = .{ .start = start, .end = start + 2 } } };
             };
 
-            try scope_env.add_hint("(==)", eq);
+            try scope_env.addHint("(==)", eq);
         }
 
-        const inference_ty_id = try ty_builder.bound_id("InferenceTy", &env);
+        const inference_ty_id = try ty_builder.boundId("InferenceTy", &env);
 
-        const inference_ty_a = inference_ty: {
-            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-            break :inference_ty Ty{ .bound = .{
+        const inference_ty_a = inferenceTy: {
+            const start = try env.core_env.insertTy(env.alloc, a_typevar);
+            break :inferenceTy Ty{ .bound = .{
                 .id = inference_ty_id,
                 .range = .{ .start = start, .end = start + 1 },
             } };
         };
-        try scope_env.add_hint("CyclicType", mkCT: {
-            const start = try env.core_env.insert_ty(env.alloc, inference_ty_a);
-            _ = try env.core_env.insert_ty(env.alloc, unify_error_a);
+        try scope_env.addHint("CyclicType", mkCT: {
+            const start = try env.core_env.insertTy(env.alloc, inference_ty_a);
+            _ = try env.core_env.insertTy(env.alloc, unify_error_a);
             break :mkCT .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
             } };
         });
 
-        try scope_env.add_hint("Infer", build_infer: {
+        try scope_env.addHint("Infer", buildInfer: {
             // InferenceTy a -> UnifyEvent a
-            const middle_param = try env.core_env.insert_ty(env.alloc, inference_ty_a);
-            _ = try env.core_env.insert_ty(env.alloc, unify_event_a);
+            const middle_param = try env.core_env.insertTy(env.alloc, inference_ty_a);
+            _ = try env.core_env.insertTy(env.alloc, unify_event_a);
 
             // a -> (InferenceTy a -> UnifyEvent a)
-            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-            _ = try env.core_env.insert_ty(env.alloc, .{ .bound = .{
+            const start = try env.core_env.insertTy(env.alloc, a_typevar);
+            _ = try env.core_env.insertTy(env.alloc, .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = middle_param, .end = middle_param + 2 },
             } });
-            break :build_infer Ty{ .bound = .{
+            break :buildInfer Ty{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
             } };
         });
 
-        try scope_env.add_hint("Inference", inference: {
-            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-            _ = try env.core_env.insert_ty(env.alloc, inference_ty_a);
+        try scope_env.addHint("Inference", inference: {
+            const start = try env.core_env.insertTy(env.alloc, a_typevar);
+            _ = try env.core_env.insertTy(env.alloc, inference_ty_a);
             break :inference .{ .bound = .{
                 .id = func_bound_id,
                 .range = .{ .start = start, .end = start + 2 },
             } };
         });
-
-        //        const list_of_inference_ty_a = mklist: {
-        //            const start = try env.core_env.insert_ty(env.alloc, inference_ty_a);
-        //            break :mklist Ty{ .bound = .{ .bound_id = list_bound_id, .bound_range = .{ .start = start, .end = start + 1 } } };
-        //        };
-        //
-        //        try scope_env.add_hint("Bound", mkBound: {
-        //            const func_list_to_a = mkList2a: {
-        //                const start = try env.core_env.insert_ty(env.alloc, list_of_inference_ty_a);
-        //                _ = try env.core_env.insert_ty(env.alloc, inference_ty_a);
-        //                break :mkList2a Ty{ .bound = .{
-        //                    .bound_id = func_bound_id,
-        //                    .bound_range = .{ .start = start, .end = start + 2 },
-        //                } };
-        //            };
-        //
-        //            const start = try env.core_env.insert_ty(env.alloc, a_typevar);
-        //            _ = try env.core_env.insert_ty(env.alloc, func_list_to_a);
-        //            break :mkBound .{ .bound = .{
-        //                .bound_id = func_bound_id,
-        //                .bound_range = .{ .start = start, .end = start + 2 },
-        //            } };
-        //        });
     }
 
-    scope_env.format_hintmap(stdout, &ast, &env);
+    scope_env.formatHintmap(stdout, &ast, &env);
 
     // constraints also go into GPA since its allocations are sporadic.
     var constraints = std.ArrayList(solver.Equation).init(gpa.allocator());
@@ -302,31 +271,30 @@ pub fn main() !void {
     var ast_arena = std.heap.ArenaAllocator.init(gpa.allocator());
     var ast_builder = Ast.Builder.init(ast_arena.allocator(), &ast);
 
-    const unify_1_index = try build_unify_1(&ast_builder);
+    const unify_1_index = try buildUnify1(&ast_builder);
 
     stdout.print("unify: ", .{}) catch {};
-    Ast.format_ast_node(stdout, unify_1_index, &ast) catch {};
+    Ast.formatAstNode(stdout, unify_1_index, &ast) catch {};
     stdout.print("\n", .{}) catch {};
     try bw.flush();
 
-    const unify_2_index = try build_unify_2(&ast_builder);
+    const unify_2_index = try buildUnify2(&ast_builder);
     ast_builder.deinit();
     ast_arena.deinit();
 
     stdout.print("unify2: ", .{}) catch {};
-    Ast.format_ast_node(stdout, unify_2_index, &ast) catch {};
+    Ast.formatAstNode(stdout, unify_2_index, &ast) catch {};
     stdout.print("\n", .{}) catch {};
     try bw.flush();
 
-    //try walk_decl(unify_1_index, &ast, &scope_env, &ty_builder, &env, &constraints);
-    try lower.walk_decl(unify_2_index, &ast, &scope_env, &ty_builder, &env, &constraints);
+    try lower.walkDecl(unify_2_index, &ast, &scope_env, &ty_builder, &env, &constraints);
 
     var result = try solver.solve(constraints, &env.core_env);
 
-    try drop_temps(&result.inferences, &env);
+    try dropTemps(&result.inferences, &env);
     defer result.deinit();
 
-    try format.format_result(stdout, &result, &env, &ast);
+    try format.formatResult(stdout, &result, &env, &ast);
     try stdout.print("\n", .{});
 
     try bw.flush(); // don't forget to flush!

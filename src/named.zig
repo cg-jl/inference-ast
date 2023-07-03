@@ -42,7 +42,7 @@ pub const Env = struct {
         self.bound_names.deinit(self.alloc);
     }
 
-    pub fn add_bound_id(self: *Env, name: []const u8) !u16 {
+    pub fn addBoundId(self: *Env, name: []const u8) !u16 {
         const len = @truncate(u16, self.bound_names.items.len);
         try self.bound_names.append(self.alloc, name);
         return len;
@@ -58,7 +58,7 @@ pub const Env = struct {
         return try self.inference(.{ .tag = .unknown_expr, .index = index });
     }
 
-    pub fn create_var(self: *Env, comptime tag: Inference.Tag, name: Variable) !Inference {
+    pub fn createVar(self: *Env, comptime tag: Inference.Tag, name: Variable) !Inference {
         const var_index = @truncate(u16, self.variables.items.len);
         try self.variables.append(self.alloc, name);
         return .{ .tag = tag, .index = var_index };
@@ -69,7 +69,7 @@ pub const Env = struct {
     }
 
     pub fn variable(self: *Env, comptime tag: Inference.Tag, desc: Variable) !u16 {
-        const i = try self.create_var(tag, desc);
+        const i = try self.createVar(tag, desc);
         return try self.inference(i);
     }
 
@@ -141,7 +141,6 @@ pub const Env = struct {
             }
         }
 
-        //        std.debug.assert(results.items.len == 1, "must have consumed all the result stack but one");
         return results.items[0];
     }
 };

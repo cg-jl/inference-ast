@@ -71,7 +71,7 @@ const NodeData = struct {
     lhs: u16,
     rhs: u16,
 
-    pub fn as_ref(self: NodeData) u16 {
+    pub fn asRef(self: NodeData) u16 {
         return self.lhs;
     }
 
@@ -81,20 +81,20 @@ const NodeData = struct {
 
     const Decl = struct { name: []const u8, args_begin: u16, args_end: u16, clauses_begin: u16, clauses_end: u16, expr: u16 };
 
-    pub fn as_bind(self: NodeData, ast: *const AST) struct { name: []const u8, expr: u16 } {
-        return .{ .name = ast.as_name(self.lhs), .expr = self.rhs };
+    pub fn asBind(self: NodeData, ast: *const AST) struct { name: []const u8, expr: u16 } {
+        return .{ .name = ast.asName(self.lhs), .expr = self.rhs };
     }
 
-    pub fn as_apply(self: NodeData) struct { func: u16, arg: u16 } {
+    pub fn asApply(self: NodeData) struct { func: u16, arg: u16 } {
         return .{ .func = self.lhs, .arg = self.rhs };
     }
 
-    pub fn as_decl(self: NodeData, index: u16, ast: *const AST) Decl {
+    pub fn asDecl(self: NodeData, index: u16, ast: *const AST) Decl {
         const decl_info = ast.decl_infos.items[self.lhs];
-        return .{ .name = ast.as_name(decl_info.name_index), .args_begin = index - decl_info.arg_count, .args_end = index, .clauses_begin = index - decl_info.arg_count - decl_info.clause_count, .clauses_end = index - decl_info.arg_count, .expr = decl_info.expr_id };
+        return .{ .name = ast.asName(decl_info.name_index), .args_begin = index - decl_info.arg_count, .args_end = index, .clauses_begin = index - decl_info.arg_count - decl_info.clause_count, .clauses_end = index - decl_info.arg_count, .expr = decl_info.expr_id };
     }
 
-    pub fn as_if(self: NodeData, index: u16, ast: *const AST) struct { condition: u16, then_part: u16, else_part: u16 } {
+    pub fn asIf(self: NodeData, index: u16, ast: *const AST) struct { condition: u16, then_part: u16, else_part: u16 } {
         const info = ast.ifs.items[self.rhs];
         return .{ .condition = self.lhs, .then_part = index - info.then_distance, .else_part = index - info.else_distance };
     }
@@ -158,7 +158,7 @@ pub const AST = struct {
         self.nodes.deinit(self.alloc);
     }
 
-    pub inline fn as_name(self: *const AST, name_index: u16) []const u8 {
+    pub inline fn asName(self: *const AST, name_index: u16) []const u8 {
         return self.names.items[name_index];
     }
 
@@ -255,7 +255,7 @@ pub const AST = struct {
     }
 };
 
-pub fn format_ty(writer: anytype, ty: core.Ty, env: *const named.Env, ast: *const AST) !void {
+pub fn formatTy(writer: anytype, ty: core.Ty, env: *const named.Env, ast: *const AST) !void {
     switch (ty) {
         .inference => |id| {
             const inference = env.inferences.items[id];
@@ -272,7 +272,7 @@ pub fn format_ty(writer: anytype, ty: core.Ty, env: *const named.Env, ast: *cons
                     try std.fmt.format(writer, "t{}", .{inference.index});
                 },
                 .expr => {
-                    try format_ast_node(writer, inference.index, ast);
+                    try formatAstNode(writer, inference.index, ast);
                 },
             }
         },
@@ -285,25 +285,25 @@ pub fn format_ty(writer: anytype, ty: core.Ty, env: *const named.Env, ast: *cons
 
                 if (lhs_is_func) {
                     _ = try writer.write("(");
-                    try format_ty(writer, env.core_env.tys.items[bound.range.start], env, ast);
+                    try formatTy(writer, env.core_env.tys.items[bound.range.start], env, ast);
                     _ = try writer.write(")");
                 } else {
-                    try format_ty(writer, env.core_env.tys.items[bound.range.start], env, ast);
+                    try formatTy(writer, env.core_env.tys.items[bound.range.start], env, ast);
                 }
 
                 _ = try writer.write(" -> ");
-                try format_ty(writer, env.core_env.tys.items[bound.range.start + 1], env, ast);
+                try formatTy(writer, env.core_env.tys.items[bound.range.start + 1], env, ast);
             } else {
                 try std.fmt.format(writer, "{s}", .{env.bound_names.items[bound.id]});
                 for (env.core_env.tys.items[bound.range.start..bound.range.end]) |child_ty| {
                     _ = try writer.write(" ");
 
-                    if (child_ty.has_bound_args()) {
+                    if (child_ty.hasBoundArgs()) {
                         _ = try writer.write("(");
-                        try format_ty(writer, child_ty, env, ast);
+                        try formatTy(writer, child_ty, env, ast);
                         _ = try writer.write(")");
                     } else {
-                        try format_ty(writer, child_ty, env, ast);
+                        try formatTy(writer, child_ty, env, ast);
                     }
                 }
             }
@@ -311,10 +311,10 @@ pub fn format_ty(writer: anytype, ty: core.Ty, env: *const named.Env, ast: *cons
     }
 }
 
-pub fn format_ast_node(writer: anytype, index: u16, ast: *const AST) !void {
+pub fn formatAstNode(writer: anytype, index: u16, ast: *const AST) !void {
     switch (ast.nodes.items(.tag)[index]) {
         .decl => {
-            const info = ast.nodes.items(.data)[index].as_decl(index, ast);
+            const info = ast.nodes.items(.data)[index].asDecl(index, ast);
             _ = try writer.write(info.name);
             _ = try writer.write(" ");
             {
@@ -322,68 +322,68 @@ pub fn format_ast_node(writer: anytype, index: u16, ast: *const AST) !void {
                 while (current_arg != info.args_end) : (current_arg += 1) {
                     if (ast.nodes.items(.tag)[current_arg] == .apply) {
                         _ = try writer.write("(");
-                        try format_ast_node(writer, current_arg, ast);
+                        try formatAstNode(writer, current_arg, ast);
                         _ = try writer.write(")");
                     } else {
-                        try format_ast_node(writer, current_arg, ast);
+                        try formatAstNode(writer, current_arg, ast);
                     }
                     _ = try writer.write(" ");
                 }
             }
 
             _ = try writer.write(" = ");
-            try format_ast_node(writer, info.expr, ast);
+            try formatAstNode(writer, info.expr, ast);
 
             if (info.clauses_begin != info.args_begin) {
                 _ = try writer.write("\n    where ");
-                try format_ast_node(writer, info.clauses_begin, ast);
+                try formatAstNode(writer, info.clauses_begin, ast);
                 var current_clause = info.clauses_begin + 1;
                 while (current_clause != info.args_begin) : (current_clause += 1) {
                     _ = try writer.write("\n          ");
-                    try format_ast_node(writer, current_clause, ast);
+                    try formatAstNode(writer, current_clause, ast);
                 }
             }
         },
         .bind => {
-            const info = ast.nodes.items(.data)[index].as_bind(ast);
+            const info = ast.nodes.items(.data)[index].asBind(ast);
             _ = try writer.write(info.name);
             _ = try writer.write("@");
             if (ast.nodes.items(.tag)[info.expr] == .apply) {
                 _ = try writer.write("(");
-                try format_ast_node(writer, info.expr, ast);
+                try formatAstNode(writer, info.expr, ast);
                 _ = try writer.write(")");
             } else {
-                try format_ast_node(writer, info.expr, ast);
+                try formatAstNode(writer, info.expr, ast);
             }
         },
         .apply => {
-            const info = ast.nodes.items(.data)[index].as_apply();
-            try format_ast_node(writer, info.func, ast);
+            const info = ast.nodes.items(.data)[index].asApply();
+            try formatAstNode(writer, info.func, ast);
             _ = try writer.write(" ");
             if (ast.nodes.items(.tag)[info.arg] == .apply) {
                 _ = try writer.write("(");
-                try format_ast_node(writer, info.arg, ast);
+                try formatAstNode(writer, info.arg, ast);
                 _ = try writer.write(")");
             } else {
-                try format_ast_node(writer, info.arg, ast);
+                try formatAstNode(writer, info.arg, ast);
             }
         },
         .name_lookup => {
-            const name_index = ast.nodes.items(.data)[index].as_ref();
-            const name = ast.as_name(name_index);
+            const name_index = ast.nodes.items(.data)[index].asRef();
+            const name = ast.asName(name_index);
             _ = try writer.write(name);
         },
         .ignored => {
             _ = try writer.write("_");
         },
         .ifexpr => {
-            const info = ast.nodes.items(.data)[index].as_if(index, ast);
+            const info = ast.nodes.items(.data)[index].asIf(index, ast);
             _ = try writer.write("if ");
-            try format_ast_node(writer, info.condition, ast);
+            try formatAstNode(writer, info.condition, ast);
             _ = try writer.write(" then ");
-            try format_ast_node(writer, info.then_part, ast);
+            try formatAstNode(writer, info.then_part, ast);
             _ = try writer.write(" else ");
-            try format_ast_node(writer, info.else_part, ast);
+            try formatAstNode(writer, info.else_part, ast);
         },
     }
 }
