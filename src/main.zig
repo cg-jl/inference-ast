@@ -263,7 +263,7 @@ pub fn main() !void {
         });
     }
 
-    scope_env.formatHintmap(stdout, &ast, &env);
+    try scope_env.formatHintmap(stdout, &ast, &env);
 
     // constraints also go into GPA since its allocations are sporadic.
     var constraints = std.ArrayList(solver.Equation).init(gpa.allocator());
@@ -273,18 +273,14 @@ pub fn main() !void {
 
     const unify_1_index = try buildUnify1(&ast_builder);
 
-    stdout.print("unify: ", .{}) catch {};
-    Ast.formatAstNode(stdout, unify_1_index, &ast) catch {};
-    stdout.print("\n", .{}) catch {};
+    stdout.print("unify: {}\n", .{ast.formatNode(unify_1_index)}) catch {};
     try bw.flush();
 
     const unify_2_index = try buildUnify2(&ast_builder);
     ast_builder.deinit();
     ast_arena.deinit();
 
-    stdout.print("unify2: ", .{}) catch {};
-    Ast.formatAstNode(stdout, unify_2_index, &ast) catch {};
-    stdout.print("\n", .{}) catch {};
+    stdout.print("unify2: {}\n", .{ast.formatNode(unify_2_index)}) catch {};
     try bw.flush();
 
     try lower.walkDecl(unify_2_index, &ast, &scope_env, &ty_builder, &env, &constraints);

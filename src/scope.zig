@@ -8,13 +8,15 @@ pub const Env = struct {
     const Self = @This();
 
     const HintMap = std.StringHashMapUnmanaged(Ty);
-    pub fn formatHintmap(self: *const Self, w: anytype, ast: *const Ast.AST, env: *const named.Env) void {
+    pub fn formatHintmap(self: *const Self, w: anytype, ast: *const Ast.AST, env: *const named.Env) @TypeOf(w).Error!void {
         std.fmt.format(w, "hints in current scope:\n", .{}) catch {};
+        const cached_fmt = env.formatTy(.{ .inference = 0 }, ast);
         var iter = self.scopes.items[self.current_scope].hints.iterator();
         while (iter.next()) |i| {
-            std.fmt.format(w, "{s} = ", .{i.key_ptr.*}) catch {};
-            Ast.formatTy(w, i.value_ptr.*, env, ast) catch {};
-            std.fmt.format(w, "\n", .{}) catch {};
+            try w.print("{s} = {}\n", .{
+                i.key_ptr.*,
+                cached_fmt.cachedFmt(i.value_ptr.*),
+            });
         }
     }
 

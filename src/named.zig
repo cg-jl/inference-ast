@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const core = @import("core.zig");
+const Ast = @import("ast.zig");
 
 const log = std.log.scoped(.named);
 
@@ -143,4 +144,85 @@ pub const Env = struct {
 
         return results.items[0];
     }
+
+    pub fn formatTy(env: *const Env, ty: core.Ty, ast: *const Ast.AST) TyFmt {
+        return .{ .env = env, .cached_nodefmt = ast.formatNode(0), .ty = ty };
+    }
+
+    pub const TyFmt = struct {
+        env: *const Env,
+        /// dummy NodeFmt to avoid reslicing the AST.
+        cached_nodefmt: Ast.AST.NodeFmt,
+        ty: core.Ty,
+
+        pub fn cachedFmt(f: TyFmt, ty: core.Ty) TyFmt {
+            var other = f;
+            other.ty = ty;
+            return other;
+        }
+
+        pub fn format(
+            f: TyFmt,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            w: anytype,
+        ) @TypeOf(w).Error!void {
+            switch (f.ty) {
+                .inference => |id| {
+                    const inference_ = f.env.inferences.items[id];
+                    switch (inference_.tag) {
+                        .variable => {
+                            const variable_ = f.env.variables.items[inference_.index];
+                            return std.fmt.format(w, "{s}", .{variable_});
+                        },
+                        .typevar => {
+                            const variable_ = f.env.variables.items[inference_.index];
+                            return std.fmt.format(w, "@{s}", .{variable_});
+                        },
+                        .unknown_expr => return std.fmt.format(w, "t{}", .{inference_.index}),
+                        .expr => return std.fmt.format(
+                            w,
+                            "{}",
+                            .{f.cached_nodefmt.cachedFmt(inference_.index)},
+                        ),
+                    }
+                },
+                .bound => |bound| {
+                    const name = f.env.bound_names.items[bound.id];
+                    if (std.mem.eql(u8, "(->)", name)) {
+                        const lhs = f.env.core_env.tys.items[bound.range.start];
+                        const rhs = f.env.core_env.tys.items[bound.range.start + 1];
+
+                        const lhs_is_func =
+                            lhs == .bound and std.mem.eql(
+                            u8,
+                            f.env.bound_names.items[lhs.bound.id],
+                            "(->)",
+                        );
+
+                        if (lhs_is_func) {
+                            return std.fmt.format(w, "({}) -> {}", .{
+                                f.cachedFmt(lhs),
+                                f.cachedFmt(rhs),
+                            });
+                        } else {
+                            return std.fmt.format(w, "{} -> {}", .{
+                                f.cachedFmt(lhs),
+                                f.cachedFmt(rhs),
+                            });
+                        }
+                    } else {
+                        try std.fmt.format(w, "{s}", .{f.env.bound_names.items[bound.id]});
+                        for (f.env.core_env.view(bound.range)) |child_ty| {
+                            if (child_ty.hasBoundArgs()) {
+                                try std.fmt.format(w, " ({})", .{f.cachedFmt(child_ty)});
+                            } else {
+                                try std.fmt.format(w, " {}", .{f.cachedFmt(child_ty)});
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    };
 };

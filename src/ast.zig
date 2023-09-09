@@ -143,6 +143,105 @@ pub const AST = struct {
     ifs: std.ArrayList(IfData),
     alloc: std.mem.Allocator,
 
+    pub fn formatNode(ast: *const AST, index: u16) NodeFmt {
+        const slice = ast.nodes.slice();
+        return .{
+            .ast = ast,
+            .datas = slice.items(.data),
+            .tags = slice.items(.tag),
+            .index = index,
+        };
+    }
+
+    pub const NodeFmt = struct {
+        ast: *const AST,
+        tags: []const NodeKind,
+        datas: []const NodeData,
+        index: u16,
+
+        pub fn cachedFmt(f: NodeFmt, index: u16) NodeFmt {
+            return .{
+                .tags = f.tags,
+                .datas = f.datas,
+                .ast = f.ast,
+                .index = index,
+            };
+        }
+
+        pub fn format(
+            n: NodeFmt,
+            comptime _: []const u8,
+            _: std.fmt.FormatOptions,
+            w: anytype,
+        ) @TypeOf(w).Error!void {
+            switch (n.tags[n.index]) {
+                .decl => {
+                    const info = n.datas[n.index].asDecl(n.index, n.ast);
+                    try std.fmt.format(w, "{s} ", .{info.name});
+                    for (info.args_begin..info.args_end) |arg| {
+                        if (n.tags[arg] == .apply) {
+                            try std.fmt.format(w, "({}) ", .{n.cachedFmt(@intCast(arg))});
+                        } else {
+                            try std.fmt.format(w, "{} ", .{n.cachedFmt(@intCast(arg))});
+                        }
+                    }
+
+                    try w.writeAll(" = ");
+                    try std.fmt.format(w, "{}", .{n.cachedFmt(info.expr)});
+
+                    if (info.clauses_begin != info.args_begin) {
+                        try w.writeAll("\n    where ");
+                        try std.fmt.format(w, "{}", .{n.cachedFmt(info.clauses_begin)});
+                        for (info.clauses_begin + 1..info.clauses_end) |clause| {
+                            try std.fmt.format(
+                                w,
+                                "\n          {}",
+                                .{n.cachedFmt(@intCast(clause))},
+                            );
+                        }
+                    }
+                },
+                .bind => {
+                    const info = n.datas[n.index].asBind(n.ast);
+                    try std.fmt.format(w, "{s}@", .{info.name});
+
+                    if (n.tags[info.expr] == .apply) {
+                        return std.fmt.format(w, "({})", .{n.cachedFmt(info.expr)});
+                    } else {
+                        return std.fmt.format(w, "{}", .{n.cachedFmt(info.expr)});
+                    }
+                },
+                .apply => {
+                    const info = n.datas[n.index].asApply();
+                    try std.fmt.format(w, "{}", .{n.cachedFmt(info.func)});
+                    if (n.tags[info.arg] == .apply) {
+                        return std.fmt.format(w, " ({})", .{n.cachedFmt(info.arg)});
+                    } else {
+                        return std.fmt.format(w, " {}", .{n.cachedFmt(info.arg)});
+                    }
+                },
+                .name_lookup => {
+                    const name_index = n.datas[n.index].asRef();
+                    const lookup_name = n.ast.asName(name_index);
+                    return w.writeAll(lookup_name);
+                },
+                .ignored => return w.writeAll("_"),
+                .ifexpr => {
+                    const info = n.datas[n.index].asIf(n.index, n.ast);
+                    return std.fmt.format(
+                        w,
+                        "if {} then {} else {}",
+                        .{
+                            n.cachedFmt(info.condition),
+                            n.cachedFmt(info.then_part),
+                            n.cachedFmt(info.else_part),
+                        },
+                    );
+                },
+            }
+        }
+    };
+
     pub fn init(alloc: std.mem.Allocator) AST {
         return .{
             .decl_infos = std.ArrayList(DeclInfo).init(alloc),
@@ -254,136 +353,3 @@ pub const AST = struct {
         } });
     }
 };
-
-pub fn formatTy(writer: anytype, ty: core.Ty, env: *const named.Env, ast: *const AST) !void {
-    switch (ty) {
-        .inference => |id| {
-            const inference = env.inferences.items[id];
-            switch (inference.tag) {
-                .variable => {
-                    const variable = env.variables.items[inference.index];
-                    try std.fmt.format(writer, "{s}", .{variable});
-                },
-                .typevar => {
-                    const variable = env.variables.items[inference.index];
-                    try std.fmt.format(writer, "@{s}", .{variable});
-                },
-                .unknown_expr => {
-                    try std.fmt.format(writer, "t{}", .{inference.index});
-                },
-                .expr => {
-                    try formatAstNode(writer, inference.index, ast);
-                },
-            }
-        },
-        .bound => |bound| {
-            if (std.mem.eql(u8, env.bound_names.items[bound.id], "(->)")) {
-                const lhs_is_func = switch (env.core_env.tys.items[bound.range.start]) {
-                    .bound => |bound2| std.mem.eql(u8, env.bound_names.items[bound2.id], "(->)"),
-                    else => false,
-                };
-
-                if (lhs_is_func) {
-                    _ = try writer.write("(");
-                    try formatTy(writer, env.core_env.tys.items[bound.range.start], env, ast);
-                    _ = try writer.write(")");
-                } else {
-                    try formatTy(writer, env.core_env.tys.items[bound.range.start], env, ast);
-                }
-
-                _ = try writer.write(" -> ");
-                try formatTy(writer, env.core_env.tys.items[bound.range.start + 1], env, ast);
-            } else {
-                try std.fmt.format(writer, "{s}", .{env.bound_names.items[bound.id]});
-                for (env.core_env.tys.items[bound.range.start..bound.range.end]) |child_ty| {
-                    _ = try writer.write(" ");
-
-                    if (child_ty.hasBoundArgs()) {
-                        _ = try writer.write("(");
-                        try formatTy(writer, child_ty, env, ast);
-                        _ = try writer.write(")");
-                    } else {
-                        try formatTy(writer, child_ty, env, ast);
-                    }
-                }
-            }
-        },
-    }
-}
-
-pub fn formatAstNode(writer: anytype, index: u16, ast: *const AST) !void {
-    switch (ast.nodes.items(.tag)[index]) {
-        .decl => {
-            const info = ast.nodes.items(.data)[index].asDecl(index, ast);
-            _ = try writer.write(info.name);
-            _ = try writer.write(" ");
-            {
-                var current_arg = info.args_begin;
-                while (current_arg != info.args_end) : (current_arg += 1) {
-                    if (ast.nodes.items(.tag)[current_arg] == .apply) {
-                        _ = try writer.write("(");
-                        try formatAstNode(writer, current_arg, ast);
-                        _ = try writer.write(")");
-                    } else {
-                        try formatAstNode(writer, current_arg, ast);
-                    }
-                    _ = try writer.write(" ");
-                }
-            }
-
-            _ = try writer.write(" = ");
-            try formatAstNode(writer, info.expr, ast);
-
-            if (info.clauses_begin != info.args_begin) {
-                _ = try writer.write("\n    where ");
-                try formatAstNode(writer, info.clauses_begin, ast);
-                var current_clause = info.clauses_begin + 1;
-                while (current_clause != info.args_begin) : (current_clause += 1) {
-                    _ = try writer.write("\n          ");
-                    try formatAstNode(writer, current_clause, ast);
-                }
-            }
-        },
-        .bind => {
-            const info = ast.nodes.items(.data)[index].asBind(ast);
-            _ = try writer.write(info.name);
-            _ = try writer.write("@");
-            if (ast.nodes.items(.tag)[info.expr] == .apply) {
-                _ = try writer.write("(");
-                try formatAstNode(writer, info.expr, ast);
-                _ = try writer.write(")");
-            } else {
-                try formatAstNode(writer, info.expr, ast);
-            }
-        },
-        .apply => {
-            const info = ast.nodes.items(.data)[index].asApply();
-            try formatAstNode(writer, info.func, ast);
-            _ = try writer.write(" ");
-            if (ast.nodes.items(.tag)[info.arg] == .apply) {
-                _ = try writer.write("(");
-                try formatAstNode(writer, info.arg, ast);
-                _ = try writer.write(")");
-            } else {
-                try formatAstNode(writer, info.arg, ast);
-            }
-        },
-        .name_lookup => {
-            const name_index = ast.nodes.items(.data)[index].asRef();
-            const name = ast.asName(name_index);
-            _ = try writer.write(name);
-        },
-        .ignored => {
-            _ = try writer.write("_");
-        },
-        .ifexpr => {
-            const info = ast.nodes.items(.data)[index].asIf(index, ast);
-            _ = try writer.write("if ");
-            try formatAstNode(writer, info.condition, ast);
-            _ = try writer.write(" then ");
-            try formatAstNode(writer, info.then_part, ast);
-            _ = try writer.write(" else ");
-            try formatAstNode(writer, info.else_part, ast);
-        },
-    }
-}

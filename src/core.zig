@@ -50,25 +50,36 @@ pub const Env = struct {
     }
 };
 
-pub fn formatTy(writer: anytype, ty: Ty, env: *const Env) !void {
-    switch (ty) {
-        .inference => |id| {
-            try std.fmt.format(writer, "'{}", .{id});
-        },
+const FormatTy = struct {
+    ty: Ty,
+    env: *const Env,
 
-        .bound => |bound| {
-            try std.fmt.format(writer, "#{}", .{bound.id});
-            if (!bound.range.isEmpty()) {
-                _ = try writer.write("<");
-                try formatTy(writer, env.tys.items[bound.range.start], env);
-                for (env.tys.items[bound.range.start + 1 .. bound.range.end]) |child| {
-                    _ = try writer.write(", ");
-                    try formatTy(writer, child, env);
+    pub fn format(
+        f: FormatTy,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        w: anytype,
+    ) @TypeOf(w).Error!void {
+        switch (f.ty) {
+            .inference => |id| return std.fmt.format(w, "'{}", .{id}),
+            .bound => |bound| {
+                try std.fmt.format(w, "#{}", .{bound.id});
+                const children = f.env.view(bound.range);
+                if (children.len != 0) {
+                    try w.writeAll("<");
+                    try std.fmt.format(w, "<{}", .{formatTy(children[0], f.env)});
+                    for (children[1..]) |child| {
+                        try std.fmt.format(w, ", {}", .{formatTy(child, f.env)});
+                    }
+                    return w.writeAll(">");
                 }
-                _ = try writer.write(">");
-            }
-        },
+            },
+        }
     }
+};
+
+pub fn formatTy(ty: Ty, env: *const Env) FormatTy {
+    return .{ .ty = ty, .env = env };
 }
 
 pub fn substitute(inference: u16, target: Ty, env: *Env) void {
