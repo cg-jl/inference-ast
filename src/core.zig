@@ -42,7 +42,7 @@ pub const Env = struct {
     pub fn insertTy(self: *Env, alloc: std.mem.Allocator, ty: Ty) !u16 {
         const id = self.tys.items.len;
         try self.tys.append(alloc, ty);
-        return @truncate(u16, id);
+        return @as(u16, @truncate(id));
     }
 
     pub fn view(self: *const Env, range: Range) []const Ty {

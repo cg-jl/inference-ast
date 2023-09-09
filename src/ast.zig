@@ -20,7 +20,7 @@ pub const Builder = struct {
     pub fn cachedNameAssumeCapacity(self: *Self, name: []const u8) NameInfo {
         const get_or_put = self.lookup_node_cache.getOrPutAssumeCapacity(name);
         if (!get_or_put.found_existing) {
-            const index = @truncate(u16, self.ast.names.len);
+            const index = @as(u16, @truncate(self.ast.names.len));
             self.ast.names.appendAssumeCapacity(name);
             const node = self.ast.nameAssumeCapacity(index);
             const info = NameInfo{ .lookup_node = node, .name_index = index };
@@ -34,7 +34,7 @@ pub const Builder = struct {
     pub fn cachedName(self: *Self, name: []const u8) !NameInfo {
         const get_or_put = try self.name_cache.getOrPut(self.alloc, name);
         if (!get_or_put.found_existing) {
-            const index = @truncate(u16, self.ast.names.items.len);
+            const index = @as(u16, @truncate(self.ast.names.items.len));
             try self.ast.names.append(name);
             const node = try self.ast.name(index);
             const info = NameInfo{ .lookup_node = node, .name_index = index };
@@ -172,7 +172,7 @@ pub const AST = struct {
     }
 
     pub inline fn pushNodeAssumeCapacity(self: *AST, node: Node) u16 {
-        const idx = @truncate(u16, self.nodes.len);
+        const idx = @as(u16, @truncate(self.nodes.len));
 
         self.nodes.appendAssumeCapacity(node);
 
@@ -194,11 +194,11 @@ pub const AST = struct {
     // - a node
     // - an if data
     pub fn pushIfAssumeCapacity(self: *AST, condition: u16, then_part: u16, else_part: u16) u16 {
-        const res = @truncate(u16, self.nodes.len);
-        const if_index = @truncate(u16, self.ifs.items.len);
+        const res = @as(u16, @truncate(self.nodes.len));
+        const if_index = @as(u16, @truncate(self.ifs.items.len));
         self.ifs.appendAssumeCapacity(.{
-            .then_distance = @truncate(u8, res - then_part),
-            .else_distance = @truncate(u8, res - else_part),
+            .then_distance = @as(u8, @truncate(res - then_part)),
+            .else_distance = @as(u8, @truncate(res - else_part)),
         });
 
         return self.pushNodeAssumeCapacity(.{
@@ -244,9 +244,9 @@ pub const AST = struct {
             _ = self.pushNodeAssumeCapacity(arg);
         }
 
-        const decl_info_index = @truncate(u16, self.decl_infos.items.len);
+        const decl_info_index = @as(u16, @truncate(self.decl_infos.items.len));
         // now add the decl info
-        self.decl_infos.appendAssumeCapacity(.{ .name_index = name_index, .arg_count = @truncate(u8, args.len), .clause_count = @truncate(u8, clauses.len), .expr_id = res });
+        self.decl_infos.appendAssumeCapacity(.{ .name_index = name_index, .arg_count = @as(u8, @truncate(args.len)), .clause_count = @as(u8, @truncate(clauses.len)), .expr_id = res });
 
         return self.pushNodeAssumeCapacity(.{ .tag = .decl, .data = .{
             .lhs = decl_info_index,

@@ -64,7 +64,7 @@ pub fn walkDecl(index: u16, ast: *Ast.AST, scope_env: *scope.Env, types: *TypeBu
     // now unveil the patterns
     const lhs = applyDecl: {
         var applied_decl = .{ .inference = name };
-        var folded_expr = @truncate(u16, ast.nodes.len);
+        var folded_expr = @as(u16, @truncate(ast.nodes.len));
         try ast.nodes.append(ast.alloc, .{
             .tag = .name_lookup,
             .data = .{ .lhs = ast.decl_infos.items[datas[index].lhs].name_index, .rhs = 0 },
@@ -76,7 +76,7 @@ pub fn walkDecl(index: u16, ast: *Ast.AST, scope_env: *scope.Env, types: *TypeBu
             const arg_ty = try walkPattern(current_arg, ast, scope_env, types, env, equations);
 
             const applied_folded_expr = mkApplyExpr: {
-                const res = @truncate(u16, ast.nodes.len);
+                const res = @as(u16, @truncate(ast.nodes.len));
                 ast.nodes.appendAssumeCapacity(Ast.Node.apply(folded_expr, current_arg));
                 break :mkApplyExpr res;
             };
@@ -195,7 +195,7 @@ fn walkExpr(index: u16, ast: *const Ast.AST, scope_env: *scope.Env, types: *Type
 fn apply(a: Ty, b: Ty, res: Ty, types: *TypeBuilder, env: *named.Env) !solver.Equation {
     try env.core_env.tys.ensureUnusedCapacity(env.alloc, 2);
     const bound_id = try types.boundId("(->)", env);
-    const start = @truncate(u16, env.core_env.tys.items.len);
+    const start = @as(u16, @truncate(env.core_env.tys.items.len));
     env.core_env.tys.appendAssumeCapacity(b);
     env.core_env.tys.appendAssumeCapacity(res);
     const applied = Ty{ .bound = .{

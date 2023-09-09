@@ -70,7 +70,7 @@ pub const Env = struct {
     }
 
     pub fn createScope(self: *Self, parent: ?ScopeIndex) !ScopeIndex {
-        const len = @truncate(ScopeIndex, self.scopes.items.len);
+        const len = @as(ScopeIndex, @truncate(self.scopes.items.len));
         try self.scopes.append(self.arena.allocator(), .{ .parent = parent, .variables = .{}, .hints = .{} });
         return len;
     }

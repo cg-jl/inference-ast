@@ -43,13 +43,13 @@ pub const Env = struct {
     }
 
     pub fn addBoundId(self: *Env, name: []const u8) !u16 {
-        const len = @truncate(u16, self.bound_names.items.len);
+        const len = @as(u16, @truncate(self.bound_names.items.len));
         try self.bound_names.append(self.alloc, name);
         return len;
     }
 
     pub fn inference(self: *Env, inf: Inference) !u16 {
-        const len = @truncate(u16, self.inferences.items.len);
+        const len = @as(u16, @truncate(self.inferences.items.len));
         try self.inferences.append(self.alloc, inf);
         return len;
     }
@@ -59,7 +59,7 @@ pub const Env = struct {
     }
 
     pub fn createVar(self: *Env, comptime tag: Inference.Tag, name: Variable) !Inference {
-        const var_index = @truncate(u16, self.variables.items.len);
+        const var_index = @as(u16, @truncate(self.variables.items.len));
         try self.variables.append(self.alloc, name);
         return .{ .tag = tag, .index = var_index };
     }
@@ -117,7 +117,7 @@ pub const Env = struct {
                         .bound => |bound| {
                             // + 1 for the extra bind task that we push to the stack
                             try tasks.ensureUnusedCapacity(bound.range.len() + 1);
-                            tasks.appendAssumeCapacity(.{ .bind = .{ .id = bound.id, .count = @truncate(u8, bound.range.len()) } });
+                            tasks.appendAssumeCapacity(.{ .bind = .{ .id = bound.id, .count = @as(u8, @truncate(bound.range.len())) } });
                             for (self.core_env.tys.items[bound.range.start..bound.range.end]) |child_ty| {
                                 tasks.appendAssumeCapacity(.{ .instantiate = child_ty });
                             }
@@ -126,7 +126,7 @@ pub const Env = struct {
                 },
                 .bind => |info| {
                     try self.core_env.tys.ensureUnusedCapacity(self.alloc, info.count);
-                    const start = @truncate(u16, self.core_env.tys.items.len);
+                    const start = @as(u16, @truncate(self.core_env.tys.items.len));
 
                     // since the results are produced into the stack in reverse order, popping them again
                     // already restores the order.
@@ -135,7 +135,7 @@ pub const Env = struct {
                         self.core_env.tys.appendAssumeCapacity(results.pop());
                     }
 
-                    const end = @truncate(u16, self.core_env.tys.items.len);
+                    const end = @as(u16, @truncate(self.core_env.tys.items.len));
                     try results.append(.{ .bound = .{ .id = info.id, .range = .{ .start = start, .end = end } } });
                 },
             }
