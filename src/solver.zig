@@ -1,6 +1,30 @@
 const std = @import("std");
 const core = @import("core.zig");
 
+// four types of "types":
+// - set (exact). These are given by declarations. They contain a list of properties (types) that they conform to.
+// - inference. These accept substitutions when equated to other types.
+// - Weak set. When equated to a type, this type must "contain" all of the weak set's properties, but it can contain more.
+// The reported error is chosen so the "closest" matching equation is reported. This is the equation that had the highest expansions / errors rate.
+// - error. These propagate no matter the direction, and contain the index of the error that was reported. This way minimal errors are reported and they appear
+// on the surface, instead of appearing deep into the evaluation.
+//
+// Operations:
+// equal (==). An inference accepts a substitution. Two bound types are equal if their list of properties are exactly equal.
+// some (~). LHS must contain all of the properties of RHS.
+//
+//
+// A constraint system is expected to be used with the solver. The constraint system will map inferences and bounded values to the notions of its type system,
+// and will be able to transform the errors back into language concepts.
+// Ideas:
+// - member lookups are properties. An equation might map the member lookup to the type of the member on a specific struct.
+// - Generic types are sets. Properties are added to them
+// - A trait is a weak set. Types must implement them, but they can have more things.
+// - structs are sets of their member types and method lookups.
+//      A method lookup on a given struct will directly map to a method type, which might be another set.
+
+// TODO: add "almost equal (~)" to include "following traits" (which will be just more bound ids)
+// TODO: make errors for (~) include the initial source and the final erroring part.
 pub const Equation = struct {
     lhs: core.Ty,
     rhs: core.Ty,
