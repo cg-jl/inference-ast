@@ -30,23 +30,6 @@ fn dropTemps(inferences: *solver.Map, env: *const named.Env) !void {
     }
 }
 
-const Input = struct {
-    all: []const u8,
-    start: u32,
-
-    pub fn init(input: []const u8) Input {
-        return .{ .all = input, .start = 0 };
-    }
-
-    pub fn eof(self: *Input) bool {
-        return self.start == self.all.len;
-    }
-
-    pub fn accept(self: *Input) void {
-        self.start += 1;
-    }
-};
-
 fn buildUnify2(builder: *Ast.Builder) !u16 {
     // unify (Inference a) k = if occurs a k then Left (CyclicType k) else Right
     // (Infer a k)
